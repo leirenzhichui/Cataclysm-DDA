@@ -1,43 +1,135 @@
 #include "magic.h"
 
-#include "avatar.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <memory>
+#include <set>
+#include <tuple>
+#include <utility>
+
 #include "calendar.h"
+#include "cata_utility.h"
+#include "catacharset.h"
+#include "character.h"
 #include "color.h"
+#include "compatibility.h"
+#include "creature.h"
+#include "cursesdef.h"
 #include "damage.h"
+#include "debug.h"
+#include "enum_conversions.h"
+#include "enums.h"
+#include "event.h"
+#include "field.h"
 #include "game.h"
 #include "generic_factory.h"
+#include "input.h"
+#include "inventory.h"
+#include "item.h"
 #include "json.h"
 #include "line.h"
+#include "magic_enchantment.h"
 #include "map.h"
-#include "mapdata.h"
 #include "messages.h"
+#include "mongroup.h"
 #include "monster.h"
+#include "mtype.h"
 #include "mutation.h"
-#include "npc.h"
-#include "options.h"
-#include "player.h"
-#include "projectile.h"
+#include "output.h"
+#include "character.h"
+#include "pldata.h"
+#include "point.h"
 #include "rng.h"
+#include "sounds.h"
+#include "string_formatter.h"
+#include "string_id.h"
 #include "translations.h"
+#include "ui.h"
+#include "units.h"
 
-namespace
-{
-const std::map<std::string, valid_target> target_map = {
-    { "ally", valid_target::target_ally },
-    { "hostile", valid_target::target_hostile },
-    { "self", valid_target::target_self },
-    { "ground", valid_target::target_ground },
-    { "none", valid_target::target_none }
-};
-}
+static const trait_id trait_NONE( "NONE" );
+
 namespace io
 {
+// *INDENT-OFF*
 template<>
-valid_target string_to_enum<valid_target>( const std::string &trigger )
+std::string enum_to_string<spell_target>( spell_target data )
 {
-    return string_to_enum_look_up( target_map, trigger );
+    switch( data ) {
+        case spell_target::ally: return "ally";
+        case spell_target::hostile: return "hostile";
+        case spell_target::self: return "self";
+        case spell_target::ground: return "ground";
+        case spell_target::none: return "none";
+        case spell_target::item: return "item";
+        case spell_target::fire: return "fd_fire";
+        case spell_target::blood: return "fd_blood";
+        case spell_target::num_spell_targets: break;
+    }
+    debugmsg( "Invalid valid_target" );
+    abort();
 }
+template<>
+std::string enum_to_string<body_part>( body_part data )
+{
+    switch( data ) {
+        case body_part::bp_torso: return "TORSO";
+        case body_part::bp_head: return "HEAD";
+        case body_part::bp_eyes: return "EYES";
+        case body_part::bp_mouth: return "MOUTH";
+        case body_part::bp_arm_l: return "ARM_L";
+        case body_part::bp_arm_r: return "ARM_R";
+        case body_part::bp_hand_l: return "HAND_L";
+        case body_part::bp_hand_r: return "HAND_R";
+        case body_part::bp_leg_l: return "LEG_L";
+        case body_part::bp_leg_r: return "LEG_R";
+        case body_part::bp_foot_l: return "FOOT_L";
+        case body_part::bp_foot_r: return "FOOT_R";
+        case body_part::num_bp: break;
+    }
+    debugmsg( "Invalid body_part" );
+    abort();
 }
+template<>
+std::string enum_to_string<spell_flag>( spell_flag data )
+{
+    switch( data ) {
+        case spell_flag::PERMANENT: return "PERMANENT";
+        case spell_flag::IGNORE_WALLS: return "IGNORE_WALLS";
+        case spell_flag::HOSTILE_SUMMON: return "HOSTILE_SUMMON";
+        case spell_flag::HOSTILE_50: return "HOSTILE_50";
+        case spell_flag::FRIENDLY_POLY: return "FRIENDLY_POLY";
+        case spell_flag::POLYMORPH_GROUP: return "POLYMORPH_GROUP";
+        case spell_flag::SILENT: return "SILENT";
+        case spell_flag::LOUD: return "LOUD";
+        case spell_flag::VERBAL: return "VERBAL";
+        case spell_flag::SOMATIC: return "SOMATIC";
+        case spell_flag::NO_HANDS: return "NO_HANDS";
+        case spell_flag::NO_LEGS: return "NO_LEGS";
+        case spell_flag::UNSAFE_TELEPORT: return "UNSAFE_TELEPORT";
+        case spell_flag::SWAP_POS: return "SWAP_POS";
+        case spell_flag::CONCENTRATE: return "CONCENTRATE";
+        case spell_flag::RANDOM_AOE: return "RANDOM_AOE";
+        case spell_flag::RANDOM_DAMAGE: return "RANDOM_DAMAGE";
+        case spell_flag::RANDOM_DURATION: return "RANDOM_DURATION";
+        case spell_flag::RANDOM_TARGET: return "RANDOM_TARGET";
+        case spell_flag::MUTATE_TRAIT: return "MUTATE_TRAIT";
+        case spell_flag::PAIN_NORESIST: return "PAIN_NORESIST";
+        case spell_flag::WITH_CONTAINER: return "WITH_CONTAINER";
+        case spell_flag::SPAWN_GROUP: return "SPAWN_GROUP";
+        case spell_flag::IGNITE_FLAMMABLE: return "IGNITE_FLAMMABLE";
+        case spell_flag::NO_FAIL: return "NO_FAIL";
+        case spell_flag::WONDER: return "WONDER";
+        case spell_flag::LAST: break;
+    }
+    debugmsg( "Invalid spell_flag" );
+    abort();
+}
+// *INDENT-ON*
+
+} // namespace io
 
 // LOADING
 // spell_type
@@ -45,7 +137,7 @@ valid_target string_to_enum<valid_target>( const std::string &trigger )
 namespace
 {
 generic_factory<spell_type> spell_factory( "spell" );
-}
+} // namespace
 
 template<>
 const spell_type &string_id<spell_type>::obj() const
@@ -59,26 +151,28 @@ bool string_id<spell_type>::is_valid() const
     return spell_factory.is_valid( *this );
 }
 
-void spell_type::load_spell( JsonObject &jo, const std::string &src )
+void spell_type::load_spell( const JsonObject &jo, const std::string &src )
 {
     spell_factory.load( jo, src );
 }
 
-static energy_type energy_source_from_string( const std::string &str )
+static magic_energy_type energy_source_from_string( const std::string &str )
 {
     if( str == "MANA" ) {
-        return mana_energy;
+        return magic_energy_type::mana;
     } else if( str == "HP" ) {
-        return hp_energy;
+        return magic_energy_type::hp;
     } else if( str == "BIONIC" ) {
-        return bionic_energy;
+        return magic_energy_type::bionic;
     } else if( str == "STAMINA" ) {
-        return stamina_energy;
+        return magic_energy_type::stamina;
+    } else if( str == "FATIGUE" ) {
+        return magic_energy_type::fatigue;
     } else if( str == "NONE" ) {
-        return none_energy;
+        return magic_energy_type::none;
     } else {
-        debugmsg( _( "ERROR: Invalid energy string.  Defaulting to NONE" ) );
-        return none_energy;
+        debugmsg( _( "ERROR: Invalid magic_energy_type string.  Defaulting to NONE" ) );
+        return magic_energy_type::none;
     }
 }
 
@@ -96,6 +190,8 @@ static damage_type damage_type_from_string( const std::string &str )
         return DT_COLD;
     } else if( str == "cut" ) {
         return DT_CUT;
+    } else if( str == "bullet" ) {
+        return DT_BULLET;
     } else if( str == "electric" ) {
         return DT_ELECTRIC;
     } else if( str == "stab" ) {
@@ -108,17 +204,104 @@ static damage_type damage_type_from_string( const std::string &str )
     }
 }
 
-void spell_type::load( JsonObject &jo, const std::string & )
+static std::string moves_to_string( const int moves )
 {
-    mandatory( jo, was_loaded, "id", id );
-    mandatory( jo, was_loaded, "name", name, translated_string_reader );
-    mandatory( jo, was_loaded, "description", description, translated_string_reader );
-    mandatory( jo, was_loaded, "effect", effect );
+    if( moves < to_moves<int>( 2_seconds ) ) {
+        return string_format( _( "%d moves" ), moves );
+    } else {
+        return to_string( time_duration::from_turns( moves / 100 ) );
+    }
+}
 
-    const auto trigger_reader = enum_flags_reader<valid_target> { "valid_targets" };
+void spell_type::load( const JsonObject &jo, const std::string & )
+{
+    static const
+    std::map<std::string, std::function<void( const spell &, Creature &, const tripoint & )>>
+    effect_map{
+        { "pain_split", spell_effect::pain_split },
+        { "target_attack", spell_effect::target_attack },
+        { "targeted_polymorph", spell_effect::targeted_polymorph },
+        { "projectile_attack", spell_effect::projectile_attack },
+        { "cone_attack", spell_effect::cone_attack },
+        { "line_attack", spell_effect::line_attack },
+        { "teleport_random", spell_effect::teleport_random },
+        { "spawn_item", spell_effect::spawn_ethereal_item },
+        { "recover_energy", spell_effect::recover_energy },
+        { "summon", spell_effect::spawn_summoned_monster },
+        { "summon_vehicle", spell_effect::spawn_summoned_vehicle },
+        { "translocate", spell_effect::translocate },
+        { "area_pull", spell_effect::area_pull },
+        { "area_push", spell_effect::area_push },
+        { "timed_event", spell_effect::timed_event },
+        { "ter_transform", spell_effect::transform_blast },
+        { "noise", spell_effect::noise },
+        { "vomit", spell_effect::vomit },
+        { "explosion", spell_effect::explosion },
+        { "flashbang", spell_effect::flashbang },
+        { "mod_moves", spell_effect::mod_moves },
+        { "map", spell_effect::map },
+        { "morale", spell_effect::morale },
+        { "charm_monster", spell_effect::charm_monster },
+        { "mutate", spell_effect::mutate },
+        { "bash", spell_effect::bash },
+        { "none", spell_effect::none }
+    };
+
+    mandatory( jo, was_loaded, "id", id );
+    mandatory( jo, was_loaded, "name", name );
+    mandatory( jo, was_loaded, "description", description );
+    optional( jo, was_loaded, "skill", skill, skill_id( "spellcraft" ) );
+    optional( jo, was_loaded, "message", message, to_translation( "You cast %s!" ) );
+    optional( jo, was_loaded, "sound_description", sound_description,
+              to_translation( "an explosion" ) );
+    optional( jo, was_loaded, "sound_type", sound_type, sounds::sound_t::combat );
+    optional( jo, was_loaded, "sound_ambient", sound_ambient, false );
+    optional( jo, was_loaded, "sound_id", sound_id, "" );
+    optional( jo, was_loaded, "sound_variant", sound_variant, "default" );
+    mandatory( jo, was_loaded, "effect", effect_name );
+    const auto found_effect = effect_map.find( effect_name );
+    if( found_effect == effect_map.cend() ) {
+        effect = spell_effect::none;
+        debugmsg( "ERROR: spell %s has invalid effect %s", id.c_str(), effect_name );
+    } else {
+        effect = found_effect->second;
+    }
+
+    const auto effect_targets_reader = enum_flags_reader<spell_target> { "effect_targets" };
+    optional( jo, was_loaded, "effect_filter", effect_targets, effect_targets_reader );
+
+    const auto targeted_monster_ids_reader = auto_flags_reader<mtype_id> {};
+    optional( jo, was_loaded, "targeted_monster_ids", targeted_monster_ids,
+              targeted_monster_ids_reader );
+
+    const auto trigger_reader = enum_flags_reader<spell_target> { "valid_targets" };
     mandatory( jo, was_loaded, "valid_targets", valid_targets, trigger_reader );
 
+    if( jo.has_array( "extra_effects" ) ) {
+        for( JsonObject fake_spell_obj : jo.get_array( "extra_effects" ) ) {
+            fake_spell temp;
+            temp.load( fake_spell_obj );
+            additional_spells.emplace_back( temp );
+        }
+    }
+
+    const auto bp_reader = enum_flags_reader<body_part> { "affected_bps" };
+    optional( jo, was_loaded, "affected_body_parts", affected_bps, bp_reader );
+    const auto flag_reader = enum_flags_reader<spell_flag> { "flags" };
+    optional( jo, was_loaded, "flags", spell_tags, flag_reader );
+
     optional( jo, was_loaded, "effect_str", effect_str, "" );
+
+    std::string field_input;
+    optional( jo, was_loaded, "field_id", field_input, "none" );
+    if( field_input != "none" ) {
+        field = field_type_id( field_input );
+    }
+    optional( jo, was_loaded, "field_chance", field_chance, 1 );
+    optional( jo, was_loaded, "min_field_intensity", min_field_intensity, 0 );
+    optional( jo, was_loaded, "max_field_intensity", max_field_intensity, 0 );
+    optional( jo, was_loaded, "field_intensity_increment", field_intensity_increment, 0.0f );
+    optional( jo, was_loaded, "field_intensity_variance", field_intensity_variance, 0.0f );
 
     optional( jo, was_loaded, "min_damage", min_damage, 0 );
     optional( jo, was_loaded, "damage_increment", damage_increment, 0.0f );
@@ -145,6 +328,9 @@ void spell_type::load( JsonObject &jo, const std::string & )
     optional( jo, was_loaded, "max_pierce", max_pierce, 0 );
 
     optional( jo, was_loaded, "base_energy_cost", base_energy_cost, 0 );
+    optional( jo, was_loaded, "final_energy_cost", final_energy_cost, base_energy_cost );
+    optional( jo, was_loaded, "energy_increment", energy_increment, 0.0f );
+
     std::string temp_string;
     optional( jo, was_loaded, "spell_class", temp_string, "NONE" );
     spell_class = trait_id( temp_string );
@@ -154,30 +340,96 @@ void spell_type::load( JsonObject &jo, const std::string & )
     dmg_type = damage_type_from_string( temp_string );
     optional( jo, was_loaded, "difficulty", difficulty, 0 );
     optional( jo, was_loaded, "max_level", max_level, 0 );
-    optional( jo, was_loaded, "base_casting_time", base_casting_time, 0 );
 
+    optional( jo, was_loaded, "base_casting_time", base_casting_time, 0 );
+    optional( jo, was_loaded, "final_casting_time", final_casting_time, base_casting_time );
+    optional( jo, was_loaded, "casting_time_increment", casting_time_increment, 0.0f );
+
+    for( const JsonMember member : jo.get_object( "learn_spells" ) ) {
+        learn_spells.insert( std::pair<std::string, int>( member.name(), member.get_int() ) );
+    }
+}
+
+static bool spell_infinite_loop_check( std::set<spell_id> spell_effects, const spell_id &sp )
+{
+    if( spell_effects.count( sp ) ) {
+        return true;
+    }
+    spell_effects.emplace( sp );
+
+    std::set<spell_id> unique_spell_list;
+    for( const fake_spell &fake_sp : sp->additional_spells ) {
+        unique_spell_list.emplace( fake_sp.id );
+    }
+
+    for( const spell_id &other_sp : unique_spell_list ) {
+        if( spell_infinite_loop_check( spell_effects, other_sp ) ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void spell_type::check_consistency()
 {
     for( const spell_type &sp_t : get_all() ) {
-        if( sp_t.min_aoe > sp_t.max_aoe ) {
-            debugmsg( string_format( "ERROR: %s has higher min_aoe than max_aoe", sp_t.id.c_str() ) );
+        if( ( sp_t.min_aoe > sp_t.max_aoe && sp_t.aoe_increment > 0 ) ||
+            ( sp_t.min_aoe < sp_t.max_aoe && sp_t.aoe_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_aoe than max_aoe", sp_t.id.c_str() );
         }
-        if( abs( sp_t.min_damage ) > abs( sp_t.max_damage ) ) {
-            debugmsg( string_format( "ERROR: %s has higher min_damage than max_damage", sp_t.id.c_str() ) );
+        if( ( sp_t.min_damage > sp_t.max_damage && sp_t.damage_increment > 0 ) ||
+            ( sp_t.min_damage < sp_t.max_damage && sp_t.damage_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_damage than max_damage", sp_t.id.c_str() );
         }
-        if( sp_t.min_range > sp_t.max_range ) {
-            debugmsg( string_format( "ERROR: %s has higher min_range than max_range", sp_t.id.c_str() ) );
+        if( ( sp_t.min_range > sp_t.max_range && sp_t.range_increment > 0 ) ||
+            ( sp_t.min_range < sp_t.max_range && sp_t.range_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_range than max_range", sp_t.id.c_str() );
         }
-        if( sp_t.min_dot > sp_t.max_dot ) {
-            debugmsg( string_format( "ERROR: %s has higher min_dot than max_dot", sp_t.id.c_str() ) );
+        if( ( sp_t.min_dot > sp_t.max_dot && sp_t.dot_increment > 0 ) ||
+            ( sp_t.min_dot < sp_t.max_dot && sp_t.dot_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_dot than max_dot", sp_t.id.c_str() );
         }
-        if( sp_t.min_duration > sp_t.max_duration ) {
-            debugmsg( string_format( "ERROR: %s has higher min_dot_time than max_dot_time", sp_t.id.c_str() ) );
+        if( ( sp_t.min_duration > sp_t.max_duration && sp_t.duration_increment > 0 ) ||
+            ( sp_t.min_duration < sp_t.max_duration && sp_t.duration_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_dot_time than max_dot_time", sp_t.id.c_str() );
         }
-        if( sp_t.min_pierce > sp_t.max_pierce ) {
-            debugmsg( string_format( "ERROR: %s has higher min_pierce than max_pierce", sp_t.id.c_str() ) );
+        if( ( sp_t.min_pierce > sp_t.max_pierce && sp_t.pierce_increment > 0 ) ||
+            ( sp_t.min_pierce < sp_t.max_pierce && sp_t.pierce_increment < 0 ) ) {
+            debugmsg( "ERROR: %s has higher min_pierce than max_pierce", sp_t.id.c_str() );
+        }
+        if( sp_t.casting_time_increment < 0.0f && sp_t.base_casting_time < sp_t.final_casting_time ) {
+            debugmsg( "ERROR: %s has negative increment and base_casting_time < final_casting_time",
+                      sp_t.id.c_str() );
+        }
+        if( sp_t.casting_time_increment > 0.0f && sp_t.base_casting_time > sp_t.final_casting_time ) {
+            debugmsg( "ERROR: %s has positive increment and base_casting_time > final_casting_time",
+                      sp_t.id.c_str() );
+        }
+        if( sp_t.effect_name == "summon_vehicle" ) {
+            if( !sp_t.effect_str.empty() && !vproto_id( sp_t.effect_str ).is_valid() ) {
+                debugmsg( "ERROR %s specifies a vehicle to summon, but vehicle %s is not valid", sp_t.id.c_str(),
+                          sp_t.effect_str );
+            }
+        }
+        std::set<spell_id> spell_effect_list;
+        if( spell_infinite_loop_check( spell_effect_list, sp_t.id ) ) {
+            debugmsg( "ERROR: %s has infinite loop in extra_effects", sp_t.id.c_str() );
+        }
+        if( sp_t.field ) {
+            if( sp_t.field_chance <= 0 ) {
+                debugmsg( "ERROR: %s must have a positive field chance.", sp_t.id.c_str() );
+            }
+            if( sp_t.field_intensity_increment > 0 && sp_t.max_field_intensity < sp_t.min_field_intensity ) {
+                debugmsg( "ERROR: max_field_intensity must be greater than min_field_intensity with positive increment: %s",
+                          sp_t.id.c_str() );
+            } else if( sp_t.field_intensity_increment < 0 &&
+                       sp_t.max_field_intensity > sp_t.min_field_intensity ) {
+                debugmsg( "ERROR: min_field_intensity must be greater than max_field_intensity with negative increment: %s",
+                          sp_t.id.c_str() );
+            }
+        }
+        if( sp_t.spell_tags[spell_flag::WONDER] && sp_t.additional_spells.empty() ) {
+            debugmsg( "ERROR: %s has WONDER flag but no spells to choose from!", sp_t.id.c_str() );
         }
     }
 }
@@ -199,47 +451,175 @@ bool spell_type::is_valid() const
 
 // spell
 
-spell::spell( const spell_type *sp, int xp )
-{
-    type = sp;
-    experience = xp;
-}
+spell::spell( spell_id sp, int xp ) :
+    type( sp ),
+    experience( xp )
+{}
 
-spell::spell( spell_id sp, int xp ) : spell( &sp.obj(), xp ) {}
+void spell::set_message( const translation &msg )
+{
+    alt_message = msg;
+}
 
 spell_id spell::id() const
 {
-    return type->id;
+    return type;
+}
+
+trait_id spell::spell_class() const
+{
+    return type->spell_class;
+}
+
+skill_id spell::skill() const
+{
+    return type->skill;
+}
+
+int spell::field_intensity() const
+{
+    return std::min( type->max_field_intensity,
+                     static_cast<int>( type->min_field_intensity + std::round( get_level() *
+                                       type->field_intensity_increment ) ) );
+}
+
+int spell::min_leveled_damage() const
+{
+    return type->min_damage + std::round( get_level() * type->damage_increment );
 }
 
 int spell::damage() const
 {
-    if( type->min_damage >= 0 ) {
-        return std::min( static_cast<int>( type->min_damage + round( get_level() *
-                                           type->damage_increment ) ), type->max_damage );
-    } else { // if it's negative, min and max work differently
-        return std::max( static_cast<int>( type->min_damage + round( get_level() *
-                                           type->damage_increment ) ), type->max_damage );
+    const int leveled_damage = min_leveled_damage();
+
+    if( has_flag( spell_flag::RANDOM_DAMAGE ) ) {
+        return rng( std::min( leveled_damage, type->max_damage ), std::max( leveled_damage,
+                    type->max_damage ) );
+    } else {
+        if( type->min_damage >= 0 || type->max_damage >= type->min_damage ) {
+            return std::min( leveled_damage, type->max_damage );
+        } else { // if it's negative, min and max work differently
+            return std::max( leveled_damage, type->max_damage );
+        }
     }
+}
+
+int spell::min_leveled_dot() const
+{
+    return type->min_dot + std::round( get_level() * type->dot_increment );
+}
+
+int spell::damage_dot() const
+{
+    const int leveled_dot = min_leveled_dot();
+    if( type->min_dot >= 0 || type->max_dot >= type->min_dot ) {
+        return std::min( leveled_dot, type->max_dot );
+    } else { // if it's negative, min and max work differently
+        return std::max( leveled_dot, type->max_dot );
+    }
+}
+
+damage_over_time_data spell::damage_over_time( const std::vector<bodypart_str_id> &bps ) const
+{
+    damage_over_time_data temp;
+    temp.bps = bps;
+    temp.duration = duration_turns();
+    temp.amount = damage_dot();
+    temp.type = dmg_type();
+    return temp;
+}
+
+std::string spell::damage_string() const
+{
+    if( has_flag( spell_flag::RANDOM_DAMAGE ) ) {
+        return string_format( "%d-%d", min_leveled_damage(), type->max_damage );
+    } else {
+        const int dmg = damage();
+        if( dmg >= 0 ) {
+            return string_format( "%d", dmg );
+        } else {
+            return string_format( "+%d", std::abs( dmg ) );
+        }
+    }
+}
+
+int spell::min_leveled_aoe() const
+{
+    return type->min_aoe + std::round( get_level() * type->aoe_increment );
 }
 
 int spell::aoe() const
 {
-    return std::min( static_cast<int>( type->min_aoe + round( get_level() * type->aoe_increment ) ),
-                     type->max_aoe );
+    const int leveled_aoe = min_leveled_aoe();
+
+    if( has_flag( spell_flag::RANDOM_AOE ) ) {
+        return rng( std::min( leveled_aoe, type->max_aoe ), std::max( leveled_aoe, type->max_aoe ) );
+    } else {
+        if( type->max_aoe >= type->min_aoe ) {
+            return std::min( leveled_aoe, type->max_aoe );
+        } else {
+            return std::max( leveled_aoe, type->max_aoe );
+        }
+    }
+}
+
+bool spell::in_aoe( const tripoint &source, const tripoint &target ) const
+{
+    if( has_flag( spell_flag::RANDOM_AOE ) ) {
+        return rl_dist( source, target ) <= type->max_aoe;
+    } else {
+        return rl_dist( source, target ) <= aoe();
+    }
+}
+
+std::string spell::aoe_string() const
+{
+    if( has_flag( spell_flag::RANDOM_AOE ) ) {
+        return string_format( "%d-%d", min_leveled_aoe(), type->max_aoe );
+    } else {
+        return string_format( "%d", aoe() );
+    }
 }
 
 int spell::range() const
 {
-    return std::min( static_cast<int>( type->min_range + round( get_level() * type->range_increment ) ),
-                     type->max_range );
+    const int leveled_range = type->min_range + std::round( get_level() * type->range_increment );
+    if( type->max_range >= type->min_range ) {
+        return std::min( leveled_range, type->max_range );
+    } else {
+        return std::max( leveled_range, type->max_range );
+    }
+}
+
+int spell::min_leveled_duration() const
+{
+    return type->min_duration + std::round( get_level() * type->duration_increment );
 }
 
 int spell::duration() const
 {
-    return std::min( static_cast<int>( type->min_duration + round( get_level() *
-                                       type->duration_increment ) ),
-                     type->max_duration );
+    const int leveled_duration = min_leveled_duration();
+
+    if( has_flag( spell_flag::RANDOM_DURATION ) ) {
+        return rng( std::min( leveled_duration, type->max_duration ), std::max( leveled_duration,
+                    type->max_duration ) );
+    } else {
+        if( type->max_duration >= type->min_duration ) {
+            return std::min( leveled_duration, type->max_duration );
+        } else {
+            return std::max( leveled_duration, type->max_duration );
+        }
+    }
+}
+
+std::string spell::duration_string() const
+{
+    if( has_flag( spell_flag::RANDOM_DURATION ) ) {
+        return string_format( "%s - %s", moves_to_string( min_leveled_duration() ),
+                              moves_to_string( type->max_duration ) );
+    } else {
+        return moves_to_string( duration() );
+    }
 }
 
 time_duration spell::duration_turns() const
@@ -252,48 +632,95 @@ void spell::gain_level()
     gain_exp( exp_to_next_level() );
 }
 
+void spell::gain_levels( int gains )
+{
+    if( gains < 1 ) {
+        return;
+    }
+    for( int gained = 0; gained < gains && !is_max_level(); gained++ ) {
+        gain_level();
+    }
+}
+
+void spell::set_level( int nlevel )
+{
+    experience = 0;
+    gain_levels( nlevel );
+}
+
 bool spell::is_max_level() const
 {
     return get_level() >= type->max_level;
 }
 
-bool spell::can_learn( const player &p ) const
+bool spell::can_learn( const Character &guy ) const
 {
-    if( type->spell_class == trait_id( "NONE" ) ) {
+    if( type->spell_class == trait_NONE ) {
         return true;
     }
-    return p.has_trait( type->spell_class );
+    return guy.has_trait( type->spell_class );
 }
 
-int spell::energy_cost() const
+int spell::energy_cost( const Character &guy ) const
 {
-    // todo: formula to vary energy cost
-    return type->base_energy_cost;
-}
-
-bool spell::can_cast( const player &p ) const
-{
-    if( !p.magic.knows_spell( type->id ) ) {
-        // how in the world can this happen?
-        debugmsg( "ERROR: owner of spell does not know spell" );
-        return false;
+    int cost;
+    if( type->base_energy_cost < type->final_energy_cost ) {
+        cost = std::min( type->final_energy_cost,
+                         static_cast<int>( std::round( type->base_energy_cost + type->energy_increment * get_level() ) ) );
+    } else if( type->base_energy_cost > type->final_energy_cost ) {
+        cost = std::max( type->final_energy_cost,
+                         static_cast<int>( std::round( type->base_energy_cost + type->energy_increment * get_level() ) ) );
+    } else {
+        cost = type->base_energy_cost;
     }
+    if( !has_flag( spell_flag::NO_HANDS ) ) {
+        // the first 10 points of combined encumbrance is ignored, but quickly adds up
+        const int hands_encumb = std::max( 0, guy.encumb( bp_hand_l ) + guy.encumb( bp_hand_r ) - 10 );
+        switch( type->energy_source ) {
+            default:
+                cost += 10 * hands_encumb;
+                break;
+            case magic_energy_type::hp:
+                cost += hands_encumb;
+                break;
+            case magic_energy_type::stamina:
+                cost += 100 * hands_encumb;
+                break;
+        }
+    }
+    return cost;
+}
+
+bool spell::has_flag( const spell_flag &flag ) const
+{
+    return type->spell_tags[flag];
+}
+
+bool spell::is_spell_class( const trait_id &mid ) const
+{
+    return mid == type->spell_class;
+}
+
+bool spell::can_cast( const Character &guy ) const
+{
     switch( type->energy_source ) {
-        case mana_energy:
-            return p.magic.available_mana() >= energy_cost();
-        case stamina_energy:
-            return p.stamina >= energy_cost();
-        case hp_energy: {
-            for( int i = 0; i < num_hp_parts; i++ ) {
-                if( energy_cost() < p.hp_cur[i] ) {
+        case magic_energy_type::mana:
+            return guy.magic.available_mana() >= energy_cost( guy );
+        case magic_energy_type::stamina:
+            return guy.get_stamina() >= energy_cost( guy );
+        case magic_energy_type::hp: {
+            for( const std::pair<const bodypart_str_id, bodypart> &elem : guy.get_body() ) {
+                if( energy_cost( guy ) < elem.second.get_hp_cur() ) {
                     return true;
                 }
             }
             return false;
         }
-        case bionic_energy:
-            return p.power_level >= energy_cost();
-        case none_energy:
+        case magic_energy_type::bionic:
+            return guy.get_power_level() >= units::from_kilojoule( energy_cost( guy ) );
+        case magic_energy_type::fatigue:
+            return guy.get_fatigue() < fatigue_levels::EXHAUSTED;
+        case magic_energy_type::none:
         default:
             return true;
     }
@@ -304,41 +731,92 @@ int spell::get_difficulty() const
     return type->difficulty;
 }
 
-int spell::casting_time() const
+int spell::casting_time( const Character &guy ) const
 {
-    // todo: formula for casting time
-    return type->base_casting_time;
+    // casting time in moves
+    int casting_time = 0;
+    if( type->base_casting_time < type->final_casting_time ) {
+        casting_time = std::min( type->final_casting_time,
+                                 static_cast<int>( std::round( type->base_casting_time + type->casting_time_increment *
+                                         get_level() ) ) );
+    } else if( type->base_casting_time > type->final_casting_time ) {
+        casting_time = std::max( type->final_casting_time,
+                                 static_cast<int>( std::round( type->base_casting_time + type->casting_time_increment *
+                                         get_level() ) ) );
+    } else {
+        casting_time = type->base_casting_time;
+    }
+    if( !has_flag( spell_flag::NO_LEGS ) ) {
+        // the first 20 points of encumbrance combined is ignored
+        const int legs_encumb = std::max( 0, guy.encumb( bp_leg_l ) + guy.encumb( bp_leg_r ) - 20 );
+        casting_time += legs_encumb * 3;
+    }
+    if( has_flag( spell_flag::SOMATIC ) ) {
+        // the first 20 points of encumbrance combined is ignored
+        const int arms_encumb = std::max( 0, guy.encumb( bp_arm_l ) + guy.encumb( bp_arm_r ) - 20 );
+        casting_time += arms_encumb * 2;
+    }
+    return casting_time;
 }
 
 std::string spell::name() const
 {
-    return _( type->name );
+    return type->name.translated();
 }
 
-float spell::spell_fail( const player &p ) const
+std::string spell::message() const
 {
+    if( !alt_message.empty() ) {
+        return alt_message.translated();
+    }
+    return type->message.translated();
+}
+
+float spell::spell_fail( const Character &guy ) const
+{
+    if( has_flag( spell_flag::NO_FAIL ) ) {
+        return 0.0f;
+    }
     // formula is based on the following:
     // exponential curve
     // effective skill of 0 or less is 100% failure
     // effective skill of 8 (8 int, 0 spellcraft, 0 spell level, spell difficulty 0) is ~50% failure
     // effective skill of 30 is 0% failure
-    const float effective_skill = 2 * ( get_level() - get_difficulty() ) + p.get_int() +
-                                  p.get_skill_level( skill_id( "SPELLCRAFT" ) );
+    const float effective_skill = 2 * ( get_level() - get_difficulty() ) + guy.get_int() +
+                                  guy.get_skill_level( skill() );
     // add an if statement in here because sufficiently large numbers will definitely overflow because of exponents
     if( effective_skill > 30.0f ) {
         return 0.0f;
     } else if( effective_skill < 0.0f ) {
         return 1.0f;
     }
-    const float fail_chance = pow( ( effective_skill - 30.0f ) / 30.0f, 2 );
+    float fail_chance = std::pow( ( effective_skill - 30.0f ) / 30.0f, 2 );
+    if( has_flag( spell_flag::SOMATIC ) && !guy.has_trait_flag( "SUBTLE_SPELL" ) ) {
+        // the first 20 points of encumbrance combined is ignored
+        const int arms_encumb = std::max( 0, guy.encumb( bp_arm_l ) + guy.encumb( bp_arm_r ) - 20 );
+        // each encumbrance point beyond the "gray" color counts as half an additional fail %
+        fail_chance += arms_encumb / 200.0f;
+    }
+    if( has_flag( spell_flag::VERBAL ) && !guy.has_trait_flag( "SILENT_SPELL" ) ) {
+        // a little bit of mouth encumbrance is allowed, but not much
+        const int mouth_encumb = std::max( 0, guy.encumb( bp_mouth ) - 5 );
+        fail_chance += mouth_encumb / 100.0f;
+    }
+    // concentration spells work better than you'd expect with a higher focus pool
+    if( has_flag( spell_flag::CONCENTRATE ) ) {
+        if( guy.focus_pool <= 0 ) {
+            return 0.0f;
+        }
+        fail_chance /= guy.focus_pool / 100.0f;
+    }
     return clamp( fail_chance, 0.0f, 1.0f );
 }
 
-std::string spell::colorized_fail_percent( const player &p ) const
+std::string spell::colorized_fail_percent( const Character &guy ) const
 {
-    const float fail_fl = spell_fail( p ) * 100.0f;
+    const float fail_fl = spell_fail( guy ) * 100.0f;
     std::string fail_str;
-    fail_fl == 100.0f ? fail_str = _( "Difficult!" ) : fail_str =  string_format( "%.1f %% %s",
+    fail_fl == 100.0f ? fail_str = _( "Too Difficult!" ) : fail_str = string_format( "%.1f %% %s",
                                    fail_fl, _( "Failure Chance" ) );
     nc_color color;
     if( fail_fl > 90.0f ) {
@@ -367,59 +845,73 @@ void spell::gain_exp( int nxp )
     experience += nxp;
 }
 
+void spell::set_exp( int nxp )
+{
+    experience = nxp;
+}
+
 std::string spell::energy_string() const
 {
     switch( type->energy_source ) {
-        case hp_energy:
+        case magic_energy_type::hp:
             return _( "health" );
-        case mana_energy:
+        case magic_energy_type::mana:
             return _( "mana" );
-        case stamina_energy:
+        case magic_energy_type::stamina:
             return _( "stamina" );
-        case bionic_energy:
+        case magic_energy_type::bionic:
             return _( "bionic power" );
+        case magic_energy_type::fatigue:
+            return _( "fatigue" );
         default:
             return "";
     }
 }
 
-std::string spell::energy_cost_string( const player &p ) const
+std::string spell::energy_cost_string( const Character &guy ) const
 {
-    if( energy_source() == none_energy ) {
+    if( energy_source() == magic_energy_type::none ) {
         return _( "none" );
     }
-    if( energy_source() == bionic_energy || energy_source() == mana_energy ) {
-        return colorize( to_string( energy_cost() ), c_light_blue );
+    if( energy_source() == magic_energy_type::bionic || energy_source() == magic_energy_type::mana ) {
+        return colorize( to_string( energy_cost( guy ) ), c_light_blue );
     }
-    if( energy_source() == hp_energy ) {
-        auto pair = get_hp_bar( energy_cost(), p.get_hp_max() / num_hp_parts );
+    if( energy_source() == magic_energy_type::hp ) {
+        auto pair = get_hp_bar( energy_cost( guy ), guy.get_hp_max() / num_hp_parts );
         return colorize( pair.first, pair.second );
     }
-    if( energy_source() == stamina_energy ) {
-        auto pair = get_hp_bar( energy_cost(), p.get_stamina_max() );
+    if( energy_source() == magic_energy_type::stamina ) {
+        auto pair = get_hp_bar( energy_cost( guy ), guy.get_stamina_max() );
         return colorize( pair.first, pair.second );
+    }
+    if( energy_source() == magic_energy_type::fatigue ) {
+        return colorize( to_string( energy_cost( guy ) ), c_cyan );
     }
     debugmsg( "ERROR: Spell %s has invalid energy source.", id().c_str() );
     return _( "error: energy_type" );
 }
 
-std::string spell::energy_cur_string( const player &p ) const
+std::string spell::energy_cur_string( const Character &guy ) const
 {
-    if( energy_source() == none_energy ) {
+    if( energy_source() == magic_energy_type::none ) {
         return _( "infinite" );
     }
-    if( energy_source() == bionic_energy ) {
-        return colorize( to_string( p.power_level ), c_light_blue );
+    if( energy_source() == magic_energy_type::bionic ) {
+        return colorize( to_string( units::to_kilojoule( guy.get_power_level() ) ), c_light_blue );
     }
-    if( energy_source() == mana_energy ) {
-        return colorize( to_string( p.magic.available_mana() ), c_light_blue );
+    if( energy_source() == magic_energy_type::mana ) {
+        return colorize( to_string( guy.magic.available_mana() ), c_light_blue );
     }
-    if( energy_source() == stamina_energy ) {
-        auto pair = get_hp_bar( p.stamina, p.get_stamina_max() );
+    if( energy_source() == magic_energy_type::stamina ) {
+        auto pair = get_hp_bar( guy.get_stamina(), guy.get_stamina_max() );
         return colorize( pair.first, pair.second );
     }
-    if( energy_source() == hp_energy ) {
+    if( energy_source() == magic_energy_type::hp ) {
         return "";
+    }
+    if( energy_source() == magic_energy_type::fatigue ) {
+        const std::pair<std::string, nc_color> pair = guy.get_fatigue_description();
+        return colorize( pair.first, pair.second );
     }
     debugmsg( "ERROR: Spell %s has invalid energy source.", id().c_str() );
     return _( "error: energy_type" );
@@ -427,44 +919,112 @@ std::string spell::energy_cur_string( const player &p ) const
 
 bool spell::is_valid() const
 {
-    if( type == nullptr ) {
-        return false;
+    return type.is_valid();
+}
+
+bool spell::bp_is_affected( body_part bp ) const
+{
+    return type->affected_bps[bp];
+}
+
+void spell::create_field( const tripoint &at ) const
+{
+    if( !type->field ) {
+        return;
     }
-    return type->is_valid();
+    const int intensity = field_intensity() + rng( -type->field_intensity_variance * field_intensity(),
+                          type->field_intensity_variance * field_intensity() );
+    if( intensity <= 0 ) {
+        return;
+    }
+    if( one_in( type->field_chance ) ) {
+        map &here = get_map();
+        field_entry *field = here.get_field( at, *type->field );
+        if( field ) {
+            field->set_field_intensity( field->get_field_intensity() + intensity );
+        } else {
+            here.add_field( at, *type->field, intensity, -duration_turns() );
+        }
+    }
+}
+
+void spell::make_sound( const tripoint &target ) const
+{
+    if( !has_flag( spell_flag::SILENT ) ) {
+        int loudness = std::abs( damage() ) / 3;
+        if( has_flag( spell_flag::LOUD ) ) {
+            loudness += 1 + damage() / 3;
+        }
+        make_sound( target, loudness );
+    }
+}
+
+void spell::make_sound( const tripoint &target, int loudness ) const
+{
+    sounds::sound( target, loudness, type->sound_type, type->sound_description.translated(),
+                   type->sound_ambient, type->sound_id, type->sound_variant );
 }
 
 std::string spell::effect() const
 {
-    return type->effect;
+    return type->effect_name;
 }
 
-energy_type spell::energy_source() const
+magic_energy_type spell::energy_source() const
 {
     return type->energy_source;
 }
 
-bool spell::is_valid_target( valid_target t ) const
+bool spell::is_target_in_range( const Creature &caster, const tripoint &p ) const
+{
+    return rl_dist( caster.pos(), p ) <= range();
+}
+
+bool spell::is_valid_target( spell_target t ) const
 {
     return type->valid_targets[t];
 }
 
-bool spell::is_valid_target( const tripoint &p ) const
+bool spell::is_valid_target( const Creature &caster, const tripoint &p ) const
 {
     bool valid = false;
     if( Creature *const cr = g->critter_at<Creature>( p ) ) {
-        Creature::Attitude cr_att = cr->attitude_to( g->u );
-        valid = valid || ( cr_att != Creature::A_FRIENDLY && is_valid_target( target_hostile ) ) ||
-                ( cr_att == Creature::A_FRIENDLY && is_valid_target( target_ally ) );
+        Creature::Attitude cr_att = cr->attitude_to( caster );
+        valid = valid || ( cr_att != Creature::Attitude::FRIENDLY &&
+                           is_valid_target( spell_target::hostile ) );
+        valid = valid || ( cr_att == Creature::Attitude::FRIENDLY &&
+                           is_valid_target( spell_target::ally ) &&
+                           p != caster.pos() );
+        valid = valid || ( is_valid_target( spell_target::self ) && p == caster.pos() );
+        valid = valid && target_by_monster_id( p );
+    } else {
+        valid = is_valid_target( spell_target::ground );
     }
-    if( p == g->u.pos() ) {
-        valid = valid || is_valid_target( target_self );
+    return valid;
+}
+
+bool spell::is_valid_effect_target( spell_target t ) const
+{
+    return type->effect_targets[t];
+}
+
+bool spell::target_by_monster_id( const tripoint &p ) const
+{
+    if( type->targeted_monster_ids.empty() ) {
+        return true;
     }
-    return valid || is_valid_target( target_ground );
+    bool valid = false;
+    if( monster *const target = g->critter_at<monster>( p ) ) {
+        if( type->targeted_monster_ids.find( target->type->id ) != type->targeted_monster_ids.end() ) {
+            valid = true;
+        }
+    }
+    return valid;
 }
 
 std::string spell::description() const
 {
-    return _( type->description );
+    return type->description.translated();
 }
 
 nc_color spell::damage_type_color() const
@@ -484,6 +1044,8 @@ nc_color spell::damage_type_color() const
             return c_light_gray;
         case DT_ELECTRIC:
             return c_light_blue;
+        case DT_BULLET:
+        /* fallthrough */
         case DT_STAB:
             return c_light_red;
         case DT_TRUE:
@@ -493,16 +1055,21 @@ nc_color spell::damage_type_color() const
     }
 }
 
+std::string spell::damage_type_string() const
+{
+    return name_by_dt( dmg_type() );
+}
+
 // constants defined below are just for the formula to be used,
 // in order for the inverse formula to be equivalent
-static const float a = 6200.0;
-static const float b = 0.146661;
-static const float c = -62.5;
+constexpr float a = 6200.0;
+constexpr float b = 0.146661;
+constexpr float c = -62.5;
 
 int spell::get_level() const
 {
     // you aren't at the next level unless you have the requisite xp, so floor
-    return std::max( static_cast<int>( floor( log( experience + a ) / b + c ) ), 0 );
+    return std::max( static_cast<int>( std::floor( std::log( experience + a ) / b + c ) ), 0 );
 }
 
 int spell::get_max_level() const
@@ -519,7 +1086,7 @@ static int exp_for_level( int level )
     if( level == 0 ) {
         return 0;
     }
-    return ceil( exp( ( level - c ) * b ) ) - a;
+    return std::ceil( std::exp( ( level - c ) * b ) ) - a;
 }
 
 int spell::exp_to_next_level() const
@@ -535,24 +1102,67 @@ std::string spell::exp_progress() const
     const int denominator = next_level_xp - this_level_xp;
     const float progress = static_cast<float>( xp() - this_level_xp ) / std::max( 1.0f,
                            static_cast<float>( denominator ) );
-    return string_format( "%i%%", clamp( static_cast<int>( round( progress * 100 ) ), 0, 99 ) );
+    return string_format( "%i%%", clamp( static_cast<int>( std::round( progress * 100 ) ), 0, 99 ) );
 }
 
-float spell::exp_modifier( const player &p ) const
+float spell::exp_modifier( const Character &guy ) const
 {
-    const float int_modifier = ( p.get_int() - 8.0f ) / 8.0f;
+    const float int_modifier = ( guy.get_int() - 8.0f ) / 8.0f;
     const float difficulty_modifier = get_difficulty() / 20.0f;
-    const float spellcraft_modifier = p.get_skill_level( skill_id( "SPELLCRAFT" ) ) / 10.0f;
+    const float spellcraft_modifier = guy.get_skill_level( skill() ) / 10.0f;
 
-    return int_modifier + difficulty_modifier + spellcraft_modifier + 1.0f;
+    return ( int_modifier + difficulty_modifier + spellcraft_modifier ) / 5.0f + 1.0f;
 }
 
-int spell::casting_exp( const player &p ) const
+int spell::casting_exp( const Character &guy ) const
 {
     // the amount of xp you would get with no modifiers
     const int base_casting_xp = 75;
 
-    return round( p.adjust_for_focus( base_casting_xp * exp_modifier( p ) ) );
+    return std::round( guy.adjust_for_focus( base_casting_xp * exp_modifier( guy ) ) );
+}
+
+std::string spell::enumerate_targets() const
+{
+    std::vector<std::string> all_valid_targets;
+    int last_target = static_cast<int>( spell_target::num_spell_targets );
+    for( int i = 0; i < last_target; ++i ) {
+        spell_target t = static_cast<spell_target>( i );
+        if( is_valid_target( t ) && t != spell_target::none ) {
+            all_valid_targets.emplace_back( io::enum_to_string( t ) );
+        }
+    }
+    if( all_valid_targets.size() == 1 ) {
+        return all_valid_targets[0];
+    }
+    std::string ret;
+    // TODO: if only we had a function to enumerate strings and concatenate them...
+    for( auto iter = all_valid_targets.begin(); iter != all_valid_targets.end(); iter++ ) {
+        if( iter + 1 == all_valid_targets.end() ) {
+            ret = string_format( _( "%s and %s" ), ret, *iter );
+        } else if( iter == all_valid_targets.begin() ) {
+            ret = *iter;
+        } else {
+            ret = string_format( _( "%s, %s" ), ret, *iter );
+        }
+    }
+    return ret;
+}
+
+std::string spell::list_targeted_monster_names() const
+{
+    if( type->targeted_monster_ids.empty() ) {
+        return "";
+    }
+    std::vector<std::string> all_valid_monster_names;
+    for( const mtype_id &mon_id : type->targeted_monster_ids ) {
+        all_valid_monster_names.emplace_back( mon_id->nname() );
+    }
+    //remove repeat names
+    all_valid_monster_names.erase( std::unique( all_valid_monster_names.begin(),
+                                   all_valid_monster_names.end() ), all_valid_monster_names.end() );
+    std::string ret = enumerate_as_string( all_valid_monster_names );
+    return ret;
 }
 
 damage_type spell::dmg_type() const
@@ -579,18 +1189,95 @@ std::string spell::effect_data() const
     return type->effect_str;
 }
 
+vproto_id spell::summon_vehicle_id() const
+{
+    return vproto_id( type->effect_str );
+}
+
 int spell::heal( const tripoint &target ) const
 {
     monster *const mon = g->critter_at<monster>( target );
     if( mon ) {
         return mon->heal( -damage() );
     }
-    player *const p = g->critter_at<player>( target );
+    Character *const p = g->critter_at<Character>( target );
     if( p ) {
         p->healall( -damage() );
         return -damage();
     }
     return -1;
+}
+
+void spell::cast_spell_effect( Creature &source, const tripoint &target ) const
+{
+    type->effect( *this, source, target );
+}
+
+void spell::cast_all_effects( Creature &source, const tripoint &target ) const
+{
+    if( has_flag( spell_flag::WONDER ) ) {
+        const auto iter = type->additional_spells.begin();
+        for( int num_spells = std::abs( damage() ); num_spells > 0; num_spells-- ) {
+            if( type->additional_spells.empty() ) {
+                debugmsg( "ERROR: %s has WONDER flag but no spells to choose from!", type->id.c_str() );
+                return;
+            }
+            const int rand_spell = rng( 0, type->additional_spells.size() - 1 );
+            spell sp = ( iter + rand_spell )->get_spell( get_level() );
+            const bool _self = ( iter + rand_spell )->self;
+
+            // This spell flag makes it so the message of the spell that's cast using this spell will be sent.
+            // if a message is added to the casting spell, it will be sent as well.
+            source.add_msg_if_player( sp.message() );
+
+            if( sp.has_flag( spell_flag::RANDOM_TARGET ) ) {
+                if( const cata::optional<tripoint> new_target = sp.random_valid_target( source,
+                        _self ? source.pos() : target ) ) {
+                    sp.cast_all_effects( source, *new_target );
+                }
+            } else {
+                if( _self ) {
+                    sp.cast_all_effects( source, source.pos() );
+                } else {
+                    sp.cast_all_effects( source, target );
+                }
+            }
+        }
+    } else {
+        // first call the effect of the main spell
+        cast_spell_effect( source, target );
+        for( const fake_spell &extra_spell : type->additional_spells ) {
+            spell sp = extra_spell.get_spell( get_level() );
+            if( sp.has_flag( spell_flag::RANDOM_TARGET ) ) {
+                if( const cata::optional<tripoint> new_target = sp.random_valid_target( source,
+                        extra_spell.self ? source.pos() : target ) ) {
+                    sp.cast_all_effects( source, *new_target );
+                }
+            } else {
+                if( extra_spell.self ) {
+                    sp.cast_all_effects( source, source.pos() );
+                } else {
+                    sp.cast_all_effects( source, target );
+                }
+            }
+        }
+    }
+}
+
+cata::optional<tripoint> spell::random_valid_target( const Creature &caster,
+        const tripoint &caster_pos ) const
+{
+    std::set<tripoint> valid_area;
+    for( const tripoint &target : spell_effect::spell_effect_blast( *this, caster_pos, caster_pos,
+            range(), false ) ) {
+        if( is_valid_target( caster, target ) ) {
+            valid_area.emplace( target );
+        }
+    }
+    if( valid_area.empty() ) {
+        return cata::nullopt;
+    }
+    return random_entry( valid_area );
 }
 
 // player
@@ -616,6 +1303,7 @@ void known_magic::serialize( JsonOut &json ) const
         json.end_object();
     }
     json.end_array();
+    json.member( "invlets", invlets );
 
     json.end_object();
 }
@@ -625,14 +1313,17 @@ void known_magic::deserialize( JsonIn &jsin )
     JsonObject data = jsin.get_object();
     data.read( "mana", mana );
 
-    JsonArray parray = data.get_array( "spellbook" );
-    while( parray.has_more() ) {
-        JsonObject jo = parray.next_object();
+    for( JsonObject jo : data.get_array( "spellbook" ) ) {
         std::string id = jo.get_string( "id" );
         spell_id sp = spell_id( id );
         int xp = jo.get_int( "xp" );
-        spellbook.emplace( sp, spell( sp, xp ) );
+        if( knows_spell( sp ) ) {
+            spellbook[sp].set_exp( xp );
+        } else {
+            spellbook.emplace( sp, spell( sp, xp ) );
+        }
     }
+    data.read( "invlets", invlets );
 }
 
 bool known_magic::knows_spell( const std::string &sp ) const
@@ -640,49 +1331,77 @@ bool known_magic::knows_spell( const std::string &sp ) const
     return knows_spell( spell_id( sp ) );
 }
 
-bool known_magic::knows_spell( spell_id sp ) const
+bool known_magic::knows_spell( const spell_id &sp ) const
 {
     return spellbook.count( sp ) == 1;
 }
 
-void known_magic::learn_spell( const std::string &sp, player &p, bool force )
+bool known_magic::knows_spell() const
 {
-    learn_spell( spell_id( sp ), p, force );
+    return !spellbook.empty();
 }
 
-void known_magic::learn_spell( spell_id sp, player &p, bool force )
+void known_magic::learn_spell( const std::string &sp, Character &guy, bool force )
 {
-    learn_spell( &sp.obj(), p, force );
+    learn_spell( spell_id( sp ), guy, force );
 }
 
-void known_magic::learn_spell( const spell_type *sp, player &p, bool force )
+void known_magic::learn_spell( const spell_id &sp, Character &guy, bool force )
+{
+    learn_spell( &sp.obj(), guy, force );
+}
+
+void known_magic::learn_spell( const spell_type *sp, Character &guy, bool force )
 {
     if( !sp->is_valid() ) {
         debugmsg( "Tried to learn invalid spell" );
         return;
     }
-    spell temp_spell( sp );
+    if( guy.magic.knows_spell( sp->id ) ) {
+        // you already know the spell
+        return;
+    }
+    spell temp_spell( sp->id );
     if( !temp_spell.is_valid() ) {
         debugmsg( "Tried to learn invalid spell" );
         return;
     }
-    if( !force && sp->spell_class != trait_id( "NONE" ) ) {
-        if( can_learn_spell( p, sp->id ) && !p.has_trait( sp->spell_class ) ) {
+    if( !force && sp->spell_class != trait_NONE ) {
+        if( can_learn_spell( guy, sp->id ) && !guy.has_trait( sp->spell_class ) ) {
+            std::string trait_cancel;
+            for( const trait_id &cancel : sp->spell_class->cancels ) {
+                if( cancel == sp->spell_class->cancels.back() &&
+                    sp->spell_class->cancels.back() != sp->spell_class->cancels.front() ) {
+                    trait_cancel = string_format( _( "%s and %s" ), trait_cancel, cancel->name() );
+                } else if( cancel == sp->spell_class->cancels.front() ) {
+                    trait_cancel = cancel->name();
+                    if( sp->spell_class->cancels.size() == 1 ) {
+                        trait_cancel = string_format( "%s: %s", trait_cancel, cancel->desc() );
+                    }
+                } else {
+                    trait_cancel = string_format( _( "%s, %s" ), trait_cancel, cancel->name() );
+                }
+                if( cancel == sp->spell_class->cancels.back() ) {
+                    trait_cancel += ".";
+                }
+            }
             if( query_yn(
-                    _( "Learning this spell will make you a %s and lock you out of other unique spells.\nContinue?" ),
-                    sp->spell_class.obj().name() ) ) {
-                p.set_mutation( sp->spell_class );
-                p.add_msg_if_player( sp->spell_class.obj().desc() );
+                    _( "Learning this spell will make you a\n\n%s: %s\n\nand lock you out of\n\n%s\n\nContinue?" ),
+                    sp->spell_class->name(), sp->spell_class->desc(), trait_cancel ) ) {
+                guy.set_mutation( sp->spell_class );
+                guy.on_mutation_gain( sp->spell_class );
+                guy.add_msg_if_player( sp->spell_class.obj().desc() );
             } else {
                 return;
             }
         }
     }
-    if( force || can_learn_spell( p, sp->id ) ) {
+    if( force || can_learn_spell( guy, sp->id ) ) {
         spellbook.emplace( sp->id, temp_spell );
-        p.add_msg_if_player( m_good, _( "You learned %s!" ), _( sp->name ) );
+        g->events().send<event_type::character_learns_spell>( guy.getID(), sp->id );
+        guy.add_msg_if_player( m_good, _( "You learned %s!" ), sp->name );
     } else {
-        p.add_msg_if_player( m_bad, _( "You can't learn this spell." ) );
+        guy.add_msg_if_player( m_bad, _( "You can't learn this spell." ) );
     }
 }
 
@@ -691,25 +1410,28 @@ void known_magic::forget_spell( const std::string &sp )
     forget_spell( spell_id( sp ) );
 }
 
-void known_magic::forget_spell( spell_id sp )
+void known_magic::forget_spell( const spell_id &sp )
 {
     if( !knows_spell( sp ) ) {
         debugmsg( "Can't forget a spell you don't know!" );
         return;
     }
+    add_msg( m_bad, _( "All knowledge of %s leaves you." ), sp->name );
+    // TODO: add parameter for owner of known_magic for this function
+    g->events().send<event_type::character_forgets_spell>( get_player_character().getID(), sp->id );
     spellbook.erase( sp );
 }
 
-bool known_magic::can_learn_spell( const player &p, spell_id sp ) const
+bool known_magic::can_learn_spell( const Character &guy, const spell_id &sp ) const
 {
-    const spell_type sp_t = sp.obj();
-    if( sp_t.spell_class == trait_id( "NONE" ) ) {
+    const spell_type &sp_t = sp.obj();
+    if( sp_t.spell_class == trait_NONE ) {
         return true;
     }
-    return !p.has_opposite_trait( sp_t.spell_class );
+    return !guy.has_opposite_trait( sp_t.spell_class );
 }
 
-spell &known_magic::get_spell( spell_id sp )
+spell &known_magic::get_spell( const spell_id &sp )
 {
     if( !knows_spell( sp ) ) {
         debugmsg( "ERROR: Tried to get unknown spell" );
@@ -737,394 +1459,717 @@ void known_magic::set_mana( int new_mana )
     mana = new_mana;
 }
 
-void known_magic::mod_mana( const player &p, int add_mana )
+void known_magic::mod_mana( const Character &guy, int add_mana )
 {
-    set_mana( clamp( mana + add_mana, 0, max_mana( p ) ) );
+    set_mana( clamp( mana + add_mana, 0, max_mana( guy ) ) );
 }
 
-int known_magic::max_mana( const player &p ) const
+int known_magic::max_mana( const Character &guy ) const
 {
-    const float int_bonus = ( ( 0.2f + p.get_int() * 0.1f ) - 1.0f ) * mana_base;
-    return mana_base + int_bonus;
+    const float int_bonus = ( ( 0.2f + guy.get_int() * 0.1f ) - 1.0f ) * mana_base;
+    const float unaugmented_mana = std::max( 0.0f,
+                                   ( ( mana_base + int_bonus ) * guy.mutation_value( "mana_multiplier" ) ) +
+                                   guy.mutation_value( "mana_modifier" ) - units::to_kilojoule( guy.get_power_level() ) );
+    return guy.calculate_by_enchantment( unaugmented_mana, enchant_vals::mod::MAX_MANA, true );
 }
 
-void known_magic::update_mana( const player &p, float turns )
+void known_magic::update_mana( const Character &guy, float turns )
 {
     // mana should replenish in 8 hours.
     const float full_replenish = to_turns<float>( 8_hours );
     const float ratio = turns / full_replenish;
-    mod_mana( p, floor( ratio * max_mana( p ) ) );
+    mod_mana( guy, std::floor( ratio * guy.calculate_by_enchantment( max_mana( guy ) *
+                               guy.mutation_value( "mana_regen_multiplier" ), enchant_vals::mod::REGEN_MANA ) ) );
 }
 
 std::vector<spell_id> known_magic::spells() const
 {
     std::vector<spell_id> spell_ids;
-    for( auto pair : spellbook ) {
+    for( const std::pair<const spell_id, spell> &pair : spellbook ) {
         spell_ids.emplace_back( pair.first );
     }
     return spell_ids;
 }
 
-// does the player have enough energy (of the type of the spell) to cast the spell?
-bool known_magic::has_enough_energy( const player &p, spell &sp ) const
+// does the Character have enough energy (of the type of the spell) to cast the spell?
+bool known_magic::has_enough_energy( const Character &guy, spell &sp ) const
 {
-    int cost = sp.energy_cost();
+    int cost = sp.energy_cost( guy );
     switch( sp.energy_source() ) {
-        case mana_energy:
+        case magic_energy_type::mana:
             return available_mana() >= cost;
-        case bionic_energy:
-            return p.power_level >= cost;
-        case stamina_energy:
-            return p.stamina >= cost;
-        case hp_energy:
-            for( int i = 0; i < num_hp_parts; i++ ) {
-                if( p.hp_cur[i] > cost ) {
+        case magic_energy_type::bionic:
+            return guy.get_power_level() >= units::from_kilojoule( cost );
+        case magic_energy_type::stamina:
+            return guy.get_stamina() >= cost;
+        case magic_energy_type::hp:
+            for( const std::pair<const bodypart_str_id, bodypart> &elem : guy.get_body() ) {
+                if( elem.second.get_hp_cur() > cost ) {
                     return true;
                 }
             }
             return false;
-        case none_energy:
+        case magic_energy_type::fatigue:
+            return guy.get_fatigue() < fatigue_levels::EXHAUSTED;
+        case magic_energy_type::none:
             return true;
         default:
             return false;
     }
 }
 
-int known_magic::time_to_learn_spell( const player &p, const std::string &str ) const
+int known_magic::time_to_learn_spell( const Character &guy, const std::string &str ) const
 {
-    return time_to_learn_spell( p, spell_id( str ) );
+    return time_to_learn_spell( guy, spell_id( str ) );
 }
 
-int known_magic::time_to_learn_spell( const player &p, spell_id sp ) const
+int known_magic::time_to_learn_spell( const Character &guy, const spell_id &sp ) const
 {
-    const int base_time = 30000;
-    return base_time * ( 1.0 + sp.obj().difficulty / ( 1.0 + ( p.get_int() - 8.0 ) / 8.0 ) +
-                         ( p.get_skill_level( skill_id( "SPELLCRAFT" ) ) / 10.0 ) );
+    const int base_time = to_moves<int>( 30_minutes );
+    return base_time * ( 1.0 + sp->difficulty / ( 1.0 + ( guy.get_int() - 8.0 ) / 8.0 ) +
+                         ( guy.get_skill_level( sp->skill ) / 10.0 ) );
 }
 
-// spell_effect
-
-namespace spell_effect
+int known_magic::get_spellname_max_width()
 {
-
-static tripoint random_point( int min_distance, int max_distance, const tripoint &player_pos )
-{
-    const int angle = rng( 0, 360 );
-    const int dist = rng( min_distance, max_distance );
-    const int x = round( dist * cos( angle ) );
-    const int y = round( dist * sin( angle ) );
-    return tripoint( x + player_pos.x, y + player_pos.y, player_pos.z );
+    int width = 0;
+    for( const spell *sp : get_spells() ) {
+        width = std::max( width, utf8_width( sp->name() ) );
+    }
+    return width;
 }
 
-void teleport( int min_distance, int max_distance )
+class spellcasting_callback : public uilist_callback
 {
-    if( min_distance > max_distance || min_distance < 0 || max_distance < 0 ) {
-        debugmsg( "ERROR: Teleport argument(s) invalid" );
-        return;
-    }
-    const tripoint player_pos = g->u.pos();
-    tripoint target;
-    // limit the loop just in case it's impossble to find a valid point in the range
-    int tries = 0;
-    do {
-        target = random_point( min_distance, max_distance, player_pos );
-        tries++;
-    } while( g->m.impassable( target ) && tries < 20 );
-    if( tries == 20 ) {
-        add_msg( m_bad, _( "Unable to find a valid target for teleport." ) );
-        return;
-    }
-    g->place_player( target );
-}
+    private:
+        std::vector<spell *> known_spells;
+        void draw_spell_info( const spell &sp, const uilist *menu );
+    public:
+        // invlets reserved for special functions
+        const std::set<int> reserved_invlets{ 'I', '=' };
+        bool casting_ignore;
 
-void pain_split()
-{
-    player &p = g->u;
-    add_msg( m_info, _( "Your injuries even out." ) );
-    int num_limbs = 0; // number of limbs effected (broken don't count)
-    int total_hp = 0; // total hp among limbs
-
-    for( const int &part : p.hp_cur ) {
-        if( part != 0 ) {
-            num_limbs++;
-            total_hp += part;
-        }
-    }
-    for( int &part : p.hp_cur ) {
-        const int hp_each = total_hp / num_limbs;
-        if( part != 0 ) {
-            part = hp_each;
-        }
-    }
-}
-
-void move_earth( const tripoint &target )
-{
-    ter_id ter_here = g->m.ter( target );
-
-    std::set<ter_id> empty_air = { t_hole };
-    std::set<ter_id> deep_pit = { t_pit, t_slope_down };
-    std::set<ter_id> shallow_pit = { t_pit_corpsed, t_pit_covered, t_pit_glass, t_pit_glass_covered, t_pit_shallow, t_pit_spiked, t_pit_spiked, t_pit_spiked_covered, t_rootcellar };
-    std::set<ter_id> soft_dirt = { t_grave, t_dirt, t_sand, t_clay, t_dirtmound, t_grass, t_grass_long, t_grass_tall, t_grass_golf, t_grass_dead, t_grass_white, t_dirtfloor, t_fungus_floor_in, t_fungus_floor_sup, t_fungus_floor_out, t_sandbox };
-    // rock: can still be dug through with patience, converts to sand upon completion
-    std::set<ter_id> hard_dirt = { t_pavement, t_pavement_y, t_sidewalk, t_concrete, t_thconc_floor, t_thconc_floor_olight, t_strconc_floor, t_floor, t_floor_waxed, t_carpet_red, t_carpet_yellow, t_carpet_purple, t_carpet_green, t_linoleum_white, t_linoleum_gray, t_slope_up, t_rock_red, t_rock_green, t_rock_blue, t_floor_red, t_floor_green, t_floor_blue, t_pavement_bg_dp, t_pavement_y_bg_dp, t_sidewalk_bg_dp };
-
-    if( empty_air.count( ter_here ) == 1 ) {
-        add_msg( m_bad, _( "All the dust in the air here falls to the ground." ) );
-    } else if( deep_pit.count( ter_here ) == 1 ) {
-        g->m.ter_set( target, t_hole );
-        add_msg( _( "The pit has deepened further." ) );
-    } else if( shallow_pit.count( ter_here ) == 1 ) {
-        g->m.ter_set( target, t_pit );
-        add_msg( _( "More debris shifts out of the pit." ) );
-    } else if( soft_dirt.count( ter_here ) == 1 ) {
-        g->m.ter_set( target, t_pit_shallow );
-        add_msg( _( "The earth moves out of the way for you." ) );
-    } else if( hard_dirt.count( ter_here ) == 1 ) {
-        g->m.ter_set( target, t_sand );
-        add_msg( _( "The rocks here are ground into sand." ) );
-    } else {
-        add_msg( m_bad, _( "The earth here does not listen to your command to move." ) );
-    }
-}
-
-static bool in_spell_aoe( const tripoint &target, const tripoint &epicenter, const int &radius,
-                          const bool ignore_walls )
-{
-    if( ignore_walls ) {
-        return rl_dist( epicenter, target ) <= radius;
-    }
-    std::vector<tripoint> trajectory = line_to( epicenter, target );
-    for( const tripoint &pt : trajectory ) {
-        if( g->m.impassable( pt ) ) {
+        spellcasting_callback( std::vector<spell *> &spells,
+                               bool casting_ignore ) : known_spells( spells ),
+            casting_ignore( casting_ignore ) {}
+        bool key( const input_context &, const input_event &event, int entnum,
+                  uilist * /*menu*/ ) override {
+            if( event.get_first_input() == 'I' ) {
+                casting_ignore = !casting_ignore;
+                return true;
+            }
+            if( event.get_first_input() == '=' ) {
+                int invlet = 0;
+                invlet = popup_getkey( _( "Choose a new hotkey for this spell." ) );
+                if( inv_chars.valid( invlet ) ) {
+                    const bool invlet_set =
+                        get_player_character().magic.set_invlet( known_spells[entnum]->id(), invlet, reserved_invlets );
+                    if( !invlet_set ) {
+                        popup( _( "Hotkey already used." ) );
+                    } else {
+                        popup( _( "%c set.  Close and reopen spell menu to refresh list with changes." ),
+                               invlet );
+                    }
+                } else {
+                    popup( _( "Hotkey removed." ) );
+                    get_player_character().magic.rem_invlet( known_spells[entnum]->id() );
+                }
+                return true;
+            }
             return false;
         }
-    }
-    return rl_dist( epicenter, target ) <= radius;
-}
 
-static std::set<tripoint> spell_effect_blast( spell &, const tripoint &, const tripoint &target,
-        const int aoe_radius, const bool ignore_walls )
-{
-    std::set<tripoint> targets;
-    // TODO: Make this breadth-first
-    for( int x = target.x - aoe_radius; x < target.x + aoe_radius; x++ ) {
-        for( int y = target.y - aoe_radius; y < target.y + aoe_radius; y++ ) {
-            for( int z = target.z - aoe_radius; z < target.z + aoe_radius; z++ ) {
-                const tripoint potential_target( x, y, z );
-                if( in_spell_aoe( potential_target, target, aoe_radius, ignore_walls ) ) {
-                    targets.emplace( potential_target );
-                }
+        void refresh( uilist *menu ) override {
+            mvwputch( menu->window, point( menu->w_width - menu->pad_right, 0 ), c_magenta, LINE_OXXX );
+            mvwputch( menu->window, point( menu->w_width - menu->pad_right, menu->w_height - 1 ), c_magenta,
+                      LINE_XXOX );
+            for( int i = 1; i < menu->w_height - 1; i++ ) {
+                mvwputch( menu->window, point( menu->w_width - menu->pad_right, i ), c_magenta, LINE_XOXO );
             }
-        }
-    }
-    return targets;
-}
-
-static std::set<tripoint> spell_effect_cone( spell &sp, const tripoint &source,
-        const tripoint &target,
-        const int aoe_radius, const bool ignore_walls )
-{
-    std::set<tripoint> targets;
-    // cones go all the way to end (if they don't hit an obstacle)
-    const int range = sp.range();
-    const int initial_angle = coord_to_angle( source, target );
-    std::set<tripoint> end_points;
-    for( int angle = initial_angle - floor( aoe_radius / 2.0 );
-         angle <= initial_angle + ceil( aoe_radius / 2.0 ); angle++ ) {
-        tripoint potential;
-        calc_ray_end( angle, range, source, potential );
-        end_points.emplace( potential );
-    }
-    for( const tripoint &ep : end_points ) {
-        std::vector<tripoint> trajectory = line_to( ep, source );
-        for( const tripoint &tp : trajectory ) {
-            if( ignore_walls || g->m.passable( tp ) ) {
-                targets.emplace( tp );
-            } else {
-                break;
+            std::string ignore_string = casting_ignore ? _( "Ignore Distractions" ) :
+                                        _( "Popup Distractions" );
+            mvwprintz( menu->window, point( menu->w_width - menu->pad_right + 2, 0 ),
+                       casting_ignore ? c_red : c_light_green, string_format( "%s %s", "[I]", ignore_string ) );
+            const std::string assign_letter = _( "Assign Hotkey [=]" );
+            mvwprintz( menu->window, point( menu->w_width - assign_letter.length() - 1, 0 ), c_yellow,
+                       assign_letter );
+            if( menu->selected >= 0 && static_cast<size_t>( menu->selected ) < known_spells.size() ) {
+                draw_spell_info( *known_spells[menu->selected], menu );
             }
+            wnoutrefresh( menu->window );
         }
+};
+
+static bool casting_time_encumbered( const spell &sp, const Character &guy )
+{
+    int encumb = 0;
+    if( !sp.has_flag( spell_flag::NO_LEGS ) ) {
+        // the first 20 points of encumbrance combined is ignored
+        encumb += std::max( 0, guy.encumb( bp_leg_l ) + guy.encumb( bp_leg_r ) - 20 );
     }
-    // we don't want to hit ourselves in the blast!
-    targets.erase( source );
-    return targets;
+    if( sp.has_flag( spell_flag::SOMATIC ) ) {
+        // the first 20 points of encumbrance combined is ignored
+        encumb += std::max( 0, guy.encumb( bp_arm_l ) + guy.encumb( bp_arm_r ) - 20 );
+    }
+    return encumb > 0;
 }
 
-static std::set<tripoint> spell_effect_line( spell &, const tripoint &source,
-        const tripoint &target,
-        const int aoe_radius, const bool ignore_walls )
+static bool energy_cost_encumbered( const spell &sp, const Character &guy )
 {
-    std::set<tripoint> targets;
-    const int initial_angle = coord_to_angle( source, target );
-    tripoint clockwise_starting_point;
-    calc_ray_end( initial_angle - 90, floor( aoe_radius / 2.0 ), source, clockwise_starting_point );
-    tripoint cclockwise_starting_point;
-    calc_ray_end( initial_angle + 90, ceil( aoe_radius / 2.0 ), source, cclockwise_starting_point );
-    tripoint clockwise_end_point;
-    calc_ray_end( initial_angle - 90, floor( aoe_radius / 2.0 ), target, clockwise_end_point );
-    tripoint cclockwise_end_point;
-    calc_ray_end( initial_angle + 90, ceil( aoe_radius / 2.0 ), target, cclockwise_end_point );
-
-    std::vector<tripoint> start_width_lh = line_to( source, cclockwise_starting_point );
-    std::vector<tripoint> start_width_rh = line_to( source, clockwise_starting_point );
-
-    int start_width_lh_blocked = start_width_lh.size();
-    int start_width_rh_blocked = start_width_rh.size() + 1;
-    for( const tripoint &p : start_width_lh ) {
-        if( ignore_walls || g->m.passable( p ) ) {
-            start_width_lh_blocked--;
-        } else {
-            break;
-        }
+    if( !sp.has_flag( spell_flag::NO_HANDS ) ) {
+        return std::max( 0, guy.encumb( bp_hand_l ) + guy.encumb( bp_hand_r ) - 10 ) > 0;
     }
-    for( const tripoint &p : start_width_rh ) {
-        if( ignore_walls || g->m.passable( p ) ) {
-            start_width_rh_blocked--;
-        } else {
-            break;
-        }
-    }
-
-    std::reverse( start_width_rh.begin(), start_width_rh.end() );
-    std::vector<tripoint> start_width;
-    start_width.reserve( start_width_lh.size() + start_width_rh.size() + 2 );
-    start_width.insert( start_width.end(), start_width_rh.begin(), start_width_rh.end() );
-    start_width.emplace_back( source );
-    start_width.insert( start_width.end(), start_width_lh.begin(), start_width_lh.end() );
-    std::vector<tripoint> end_width = line_to( cclockwise_end_point, clockwise_end_point );
-    // line_to omits the starting point. we want it back.
-    end_width.insert( end_width.begin(), cclockwise_end_point );
-
-    // we're going from right to left (clockwise to counterclockwise)
-    for( int i = start_width_rh_blocked;
-         i <= static_cast<int>( start_width.size() ) - start_width_lh_blocked; i++ ) {
-        for( tripoint &ep : end_width ) {
-            for( tripoint &p : line_to( start_width[i], ep ) ) {
-                if( ignore_walls || g->m.passable( p ) ) {
-                    targets.emplace( p );
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    targets.erase( source );
-
-    return targets;
+    return false;
 }
 
-// spells do not reduce in damage the further away from the epicenter the targets are
-// rather they do their full damage in the entire area of effect
-static std::set<tripoint> spell_effect_area( spell &sp, const tripoint &source,
-        const tripoint &target,
-        std::function<std::set<tripoint>( spell &, const tripoint &, const tripoint &, const int, const bool )>
-        aoe_func, bool ignore_walls = false )
+// this prints various things about the spell out in a list
+// including flags and things like "goes through walls"
+static std::string enumerate_spell_data( const spell &sp )
 {
-    std::set<tripoint> targets = { target }; // initialize with epicenter
-    if( sp.aoe() <= 1 ) {
-        return targets;
+    std::vector<std::string> spell_data;
+    if( sp.has_flag( spell_flag::CONCENTRATE ) ) {
+        spell_data.emplace_back( _( "requires concentration" ) );
     }
-
-    const int aoe_radius = sp.aoe();
-    targets = aoe_func( sp, source,  target, aoe_radius, ignore_walls );
-
-    for( const tripoint &p : targets ) {
-        if( !sp.is_valid_target( p ) ) {
-            targets.erase( p );
-        }
+    if( sp.has_flag( spell_flag::VERBAL ) ) {
+        spell_data.emplace_back( _( "verbal" ) );
     }
-
-    // Draw the explosion
-    std::map<tripoint, nc_color> explosion_colors;
-    for( auto &pt : targets ) {
-        explosion_colors[pt] = sp.damage_type_color();
+    if( sp.has_flag( spell_flag::SOMATIC ) ) {
+        spell_data.emplace_back( _( "somatic" ) );
     }
-
-    explosion_handler::draw_custom_explosion( g->u.pos(), explosion_colors );
-    return targets;
-}
-
-static void damage_targets( spell &sp, std::set<tripoint> targets )
-{
-    for( const tripoint target : targets ) {
-        Creature *const cr = g->critter_at<Creature>( target );
-        if( !cr ) {
-            continue;
-        }
-
-        projectile bolt;
-        bolt.impact = sp.get_damage_instance();
-        bolt.proj_effects.emplace( "magic" );
-
-        dealt_projectile_attack atk;
-        atk.end_point = target;
-        atk.hit_critter = cr;
-        atk.proj = bolt;
-        if( sp.damage() > 0 ) {
-            cr->deal_projectile_attack( &g->u, atk, true );
-        } else {
-            sp.heal( target );
-            add_msg( m_good, _( "%s wounds are closing up!" ), cr->disp_name( true ) );
-        }
-        if( !sp.effect_data().empty() ) {
-            const int dur_moves = sp.duration();
-            const time_duration dur_td = 1_turns * dur_moves / 100;
-            const std::vector<body_part> all_bp = { bp_head, bp_torso, bp_arm_l, bp_arm_r, bp_leg_l, bp_leg_r, };
-            for( const body_part bp : all_bp ) {
-                cr->add_effect( efftype_id( sp.effect_data() ), dur_td, bp );
-            }
-        }
-    }
-}
-
-void projectile_attack( spell &sp, const tripoint &source, const tripoint &target )
-{
-    std::vector<tripoint> trajectory = line_to( source, target );
-    for( const tripoint &pt : trajectory ) {
-        if( g->m.impassable( pt ) || pt == trajectory.back() ) {
-            target_attack( sp, source, target );
-        }
-    }
-}
-
-void target_attack( spell &sp, const tripoint &source, const tripoint &epicenter )
-{
-    damage_targets( sp, spell_effect_area( sp, source, epicenter, spell_effect_blast ) );
-}
-
-void cone_attack( spell &sp, const tripoint &source, const tripoint &target )
-{
-    damage_targets( sp, spell_effect_area( sp, source, target, spell_effect_cone ) );
-}
-
-void line_attack( spell &sp, const tripoint &source, const tripoint &target )
-{
-    damage_targets( sp, spell_effect_area( sp, source, target, spell_effect_line ) );
-}
-
-void spawn_ethereal_item( spell &sp )
-{
-    item granted( sp.effect_data(), calendar::turn );
-    if( !granted.is_comestible() ) {
-        granted.set_rot( -sp.duration_turns() );
-        granted.set_flag( "ETHEREAL_ITEM" );
-    }
-    if( granted.count_by_charges() && sp.damage() > 0 ) {
-        granted.charges = sp.damage();
-    }
-    if( g->u.can_wear( granted ).success() ) {
-        granted.set_flag( "FIT" );
-        g->u.wear_item( granted, false );
+    if( !sp.has_flag( spell_flag::NO_HANDS ) ) {
+        spell_data.emplace_back( _( "impeded by gloves" ) );
     } else {
-        g->u.weapon = granted;
+        spell_data.emplace_back( _( "does not require hands" ) );
     }
-    if( !granted.count_by_charges() ) {
-        for( int i = 1; i < sp.damage(); i++ ) {
-            g->u.i_add( granted );
+    if( !sp.has_flag( spell_flag::NO_LEGS ) ) {
+        spell_data.emplace_back( _( "requires mobility" ) );
+    }
+    if( sp.effect() == "target_attack" && sp.range() > 1 ) {
+        spell_data.emplace_back( _( "can be cast through walls" ) );
+    }
+    return enumerate_as_string( spell_data );
+}
+
+void spellcasting_callback::draw_spell_info( const spell &sp, const uilist *menu )
+{
+    const int h_offset = menu->w_width - menu->pad_right + 1;
+    // includes spaces on either side for readability
+    const int info_width = menu->pad_right - 4;
+    const int win_height = menu->w_height;
+    const int h_col1 = h_offset + 1;
+    const int h_col2 = h_offset + ( info_width / 2 );
+    const catacurses::window w_menu = menu->window;
+    // various pieces of spell data mean different things depending on the effect of the spell
+    const std::string fx = sp.effect();
+    int line = 1;
+    nc_color gray = c_light_gray;
+    nc_color light_green = c_light_green;
+    nc_color yellow = c_yellow;
+
+    print_colored_text( w_menu, point( h_col1, line++ ), yellow, yellow,
+                        sp.spell_class() == trait_NONE ? _( "Classless" ) : sp.spell_class()->name() );
+
+    line += fold_and_print( w_menu, point( h_col1, line ), info_width, gray, sp.description() );
+
+    line++;
+
+    line += fold_and_print( w_menu, point( h_col1, line ), info_width, gray,
+                            enumerate_spell_data( sp ) );
+    if( line <= win_height / 3 ) {
+        line++;
+    }
+
+    print_colored_text( w_menu, point( h_col1, line ), gray, gray,
+                        string_format( "%s: %d %s", _( "Spell Level" ), sp.get_level(),
+                                       sp.is_max_level() ? _( "(MAX)" ) : "" ) );
+    print_colored_text( w_menu, point( h_col2, line++ ), gray, gray,
+                        string_format( "%s: %d", _( "Max Level" ), sp.get_max_level() ) );
+
+    print_colored_text( w_menu, point( h_col1, line ), gray, gray,
+                        sp.colorized_fail_percent( get_player_character() ) );
+    print_colored_text( w_menu, point( h_col2, line++ ), gray, gray,
+                        string_format( "%s: %d", _( "Difficulty" ), sp.get_difficulty() ) );
+
+    print_colored_text( w_menu, point( h_col1, line ), gray, gray,
+                        string_format( "%s: %s", _( "Current Exp" ), colorize( to_string( sp.xp() ), light_green ) ) );
+    print_colored_text( w_menu, point( h_col2, line++ ), gray, gray,
+                        string_format( "%s: %s", _( "to Next Level" ), colorize( to_string( sp.exp_to_next_level() ),
+                                       light_green ) ) );
+
+    if( line <= win_height / 2 ) {
+        line++;
+    }
+
+    const bool cost_encumb = energy_cost_encumbered( sp, get_player_character() );
+    std::string cost_string = cost_encumb ? _( "Casting Cost (impeded)" ) : _( "Casting Cost" );
+    std::string energy_cur = sp.energy_source() == magic_energy_type::hp ? "" :
+                             string_format( _( " (%s current)" ), sp.energy_cur_string( get_player_character() ) );
+    if( !sp.can_cast( get_player_character() ) ) {
+        cost_string = colorize( _( "Not Enough Energy" ), c_red );
+        energy_cur = "";
+    }
+    print_colored_text( w_menu, point( h_col1, line++ ), gray, gray,
+                        string_format( "%s: %s %s%s", cost_string,
+                                       sp.energy_cost_string( get_player_character() ), sp.energy_string(), energy_cur ) );
+    const bool c_t_encumb = casting_time_encumbered( sp, get_player_character() );
+    print_colored_text( w_menu, point( h_col1, line++ ), gray, gray, colorize(
+                            string_format( "%s: %s", c_t_encumb ? _( "Casting Time (impeded)" ) : _( "Casting Time" ),
+                                           moves_to_string( sp.casting_time( get_player_character() ) ) ),
+                            c_t_encumb  ? c_red : c_light_gray ) );
+
+    if( line <= win_height * 3 / 4 ) {
+        line++;
+    }
+
+    std::string targets;
+    if( sp.is_valid_target( spell_target::none ) ) {
+        targets = _( "self" );
+    } else {
+        targets = sp.enumerate_targets();
+    }
+    print_colored_text( w_menu, point( h_col1, line++ ), gray, gray,
+                        string_format( "%s: %s", _( "Valid Targets" ), targets ) );
+
+    std::string target_ids;
+    target_ids = sp.list_targeted_monster_names();
+    if( !target_ids.empty() ) {
+        fold_and_print( w_menu, point( h_col1, line++ ), info_width, gray,
+                        _( "Only affects the monsters: %s" ), target_ids );
+    }
+
+    if( line <= win_height * 3 / 4 ) {
+        line++;
+    }
+
+    const int damage = sp.damage();
+    std::string damage_string;
+    std::string range_string;
+    std::string aoe_string;
+    // if it's any type of attack spell, the stats are normal.
+    if( fx == "target_attack" || fx == "projectile_attack" || fx == "cone_attack" ||
+        fx == "line_attack" ) {
+        if( damage > 0 ) {
+            std::string dot_string;
+            if( sp.damage_dot() != 0 ) {
+                //~ amount of damage per second, abbreviated
+                dot_string = string_format( _( ", %d/sec" ), sp.damage_dot() );
+            }
+            damage_string = string_format( "%s: %s %s%s", _( "Damage" ), sp.damage_string(),
+                                           sp.damage_type_string(), dot_string );
+            damage_string = colorize( damage_string, sp.damage_type_color() );
+        } else if( damage < 0 ) {
+            damage_string = string_format( "%s: %s", _( "Healing" ), colorize( sp.damage_string(),
+                                           light_green ) );
+        }
+        if( sp.aoe() > 0 ) {
+            std::string aoe_string_temp = _( "Spell Radius" );
+            std::string degree_string;
+            if( fx == "cone_attack" ) {
+                aoe_string_temp = _( "Cone Arc" );
+                degree_string = _( "degrees" );
+            } else if( fx == "line_attack" ) {
+                aoe_string_temp = _( "Line Width" );
+            }
+            aoe_string = string_format( "%s: %d %s", aoe_string_temp, sp.aoe(), degree_string );
+        }
+    } else if( fx == "teleport_random" ) {
+        if( sp.aoe() > 0 ) {
+            aoe_string = string_format( "%s: %d", _( "Variance" ), sp.aoe() );
+        }
+    } else if( fx == "spawn_item" ) {
+        damage_string = string_format( "%s %d %s", _( "Spawn" ), sp.damage(),
+                                       item::nname( itype_id( sp.effect_data() ), sp.damage() ) );
+    } else if( fx == "summon" ) {
+        std::string monster_name = "FIXME";
+        if( sp.has_flag( spell_flag::SPAWN_GROUP ) ) {
+            // TODO: Get a more user-friendly group name
+            if( MonsterGroupManager::isValidMonsterGroup( mongroup_id( sp.effect_data() ) ) ) {
+                monster_name = "from " + sp.effect_data();
+            } else {
+                debugmsg( "Unknown monster group: %s", sp.effect_data() );
+            }
+        } else {
+            monster_name = monster( mtype_id( sp.effect_data() ) ).get_name( );
+        }
+        damage_string = string_format( "%s %d %s", _( "Summon" ), sp.damage(), _( monster_name ) );
+        aoe_string = string_format( "%s: %d", _( "Spell Radius" ), sp.aoe() );
+    } else if( fx == "targeted_polymorph" ) {
+        std::string monster_name = sp.effect_data();
+        if( sp.has_flag( spell_flag::POLYMORPH_GROUP ) ) {
+            // TODO: Get a more user-friendly group name
+            if( MonsterGroupManager::isValidMonsterGroup( mongroup_id( sp.effect_data() ) ) ) {
+                monster_name = _( "random creature" );
+            } else {
+                debugmsg( "Unknown monster group: %s", sp.effect_data() );
+            }
+        } else if( monster_name.empty() ) {
+            monster_name = _( "random creature" );
+        } else {
+            monster_name = mtype_id( sp.effect_data() )->nname();
+        }
+        damage_string = string_format( _( "Targets under: %dhp become a %s" ), sp.damage(),
+                                       monster_name );
+    } else if( fx == "ter_transform" ) {
+        aoe_string = string_format( "%s: %s", _( "Spell Radius" ), sp.aoe_string() );
+    }
+
+    range_string = string_format( "%s: %s", _( "Range" ),
+                                  sp.range() <= 0 ? _( "self" ) : to_string( sp.range() ) );
+
+    // Range / AOE in two columns
+    print_colored_text( w_menu, point( h_col1, line ), gray, gray, range_string );
+    print_colored_text( w_menu, point( h_col2, line++ ), gray, gray, aoe_string );
+
+    // One line for damage / healing / spawn / summon effect
+    print_colored_text( w_menu, point( h_col1, line++ ), gray, gray, damage_string );
+
+    // todo: damage over time here, when it gets implemeted
+
+    print_colored_text( w_menu, point( h_col1, line++ ), gray, gray, sp.duration() <= 0 ? "" :
+                        string_format( "%s: %s", _( "Duration" ), sp.duration_string() ) );
+}
+
+bool known_magic::set_invlet( const spell_id &sp, int invlet, const std::set<int> &used_invlets )
+{
+    if( used_invlets.count( invlet ) > 0 ) {
+        return false;
+    }
+    invlets[sp] = invlet;
+    return true;
+}
+
+void known_magic::rem_invlet( const spell_id &sp )
+{
+    invlets.erase( sp );
+}
+
+int known_magic::get_invlet( const spell_id &sp, std::set<int> &used_invlets )
+{
+    auto found = invlets.find( sp );
+    if( found != invlets.end() ) {
+        return found->second;
+    }
+    for( const std::pair<const spell_id, int> &invlet_pair : invlets ) {
+        used_invlets.emplace( invlet_pair.second );
+    }
+    for( int i = 'a'; i <= 'z'; i++ ) {
+        if( used_invlets.count( i ) == 0 ) {
+            used_invlets.emplace( i );
+            return i;
+        }
+    }
+    for( int i = 'A'; i <= 'Z'; i++ ) {
+        if( used_invlets.count( i ) == 0 ) {
+            used_invlets.emplace( i );
+            return i;
+        }
+    }
+    for( int i = '!'; i <= '-'; i++ ) {
+        if( used_invlets.count( i ) == 0 ) {
+            used_invlets.emplace( i );
+            return i;
+        }
+    }
+    return 0;
+}
+
+int known_magic::select_spell( const Character &guy )
+{
+    // max width of spell names
+    const int max_spell_name_length = get_spellname_max_width();
+    std::vector<spell *> known_spells = get_spells();
+
+    uilist spell_menu;
+    spell_menu.w_height_setup = [&]() -> int {
+        return clamp( static_cast<int>( known_spells.size() ), 24, TERMY * 9 / 10 );
+    };
+    const auto calc_width = []() -> int {
+        return std::max( 80, TERMX * 3 / 8 );
+    };
+    spell_menu.w_width_setup = calc_width;
+    spell_menu.pad_right_setup = [&]() -> int {
+        return calc_width() - max_spell_name_length - 5;
+    };
+    spell_menu.title = _( "Choose a Spell" );
+    spell_menu.hilight_disabled = true;
+    spellcasting_callback cb( known_spells, casting_ignore );
+    spell_menu.callback = &cb;
+
+    std::set<int> used_invlets{ cb.reserved_invlets };
+
+    for( size_t i = 0; i < known_spells.size(); i++ ) {
+        spell_menu.addentry( static_cast<int>( i ), known_spells[i]->can_cast( guy ),
+                             get_invlet( known_spells[i]->id(), used_invlets ), known_spells[i]->name() );
+    }
+
+    spell_menu.query();
+
+    casting_ignore = static_cast<spellcasting_callback *>( spell_menu.callback )->casting_ignore;
+
+    return spell_menu.ret;
+}
+
+void known_magic::on_mutation_gain( const trait_id &mid, Character &guy )
+{
+    for( const std::pair<const spell_id, int> &sp : mid->spells_learned ) {
+        learn_spell( sp.first, guy, true );
+        spell &temp_sp = get_spell( sp.first );
+        for( int level = 0; level < sp.second; level++ ) {
+            temp_sp.gain_level();
         }
     }
 }
 
+void known_magic::on_mutation_loss( const trait_id &mid )
+{
+    std::vector<spell_id> spells_to_forget;
+    for( const spell *sp : get_spells() ) {
+        if( sp->is_spell_class( mid ) ) {
+            spells_to_forget.emplace_back( sp->id() );
+        }
+    }
+    for( const spell_id &sp_id : spells_to_forget ) {
+        forget_spell( sp_id );
+    }
+}
+
+void spellbook_callback::add_spell( const spell_id &sp )
+{
+    spells.emplace_back( sp.obj() );
+}
+
+static std::string color_number( const int num )
+{
+    if( num > 0 ) {
+        return colorize( to_string( num ), c_light_green );
+    } else if( num < 0 ) {
+        return colorize( to_string( num ), c_light_red );
+    } else {
+        return colorize( to_string( num ), c_white );
+    }
+}
+
+static std::string color_number( const float num )
+{
+    if( num > 100 ) {
+        return colorize( string_format( "+%.0f", num ), c_light_green );
+    } else if( num < -100 ) {
+        return colorize( string_format( "%.0f", num ), c_light_red );
+    } else if( num > 0 ) {
+        return colorize( string_format( "+%.2f", num ), c_light_green );
+    } else if( num < 0 ) {
+        return colorize( string_format( "%.2f", num ), c_light_red );
+    } else {
+        return colorize( "0", c_white );
+    }
+}
+
+static void draw_spellbook_info( const spell_type &sp, uilist *menu )
+{
+    const int width = menu->pad_left - 4;
+    const int start_x = 2;
+    int line = 1;
+    const catacurses::window w = menu->window;
+    nc_color gray = c_light_gray;
+    nc_color yellow = c_yellow;
+    const spell fake_spell( sp.id );
+
+    const std::string spell_name = colorize( sp.name, c_light_green );
+    const std::string spell_class = sp.spell_class == trait_NONE ? _( "Classless" ) :
+                                    sp.spell_class->name();
+    print_colored_text( w, point( start_x, line ), gray, gray, spell_name );
+    print_colored_text( w, point( menu->pad_left - utf8_width( spell_class ) - 1, line++ ), yellow,
+                        yellow, spell_class );
+    line++;
+    line += fold_and_print( w, point( start_x, line ), width, gray, "%s", sp.description );
+    line++;
+
+    mvwprintz( w, point( start_x, line ), c_light_gray, string_format( "%s: %d", _( "Difficulty" ),
+               sp.difficulty ) );
+    mvwprintz( w, point( start_x + width / 2, line++ ), c_light_gray, string_format( "%s: %d",
+               _( "Max Level" ),
+               sp.max_level ) );
+
+    const std::string fx = sp.effect_name;
+    std::string damage_string;
+    std::string aoe_string;
+    bool has_damage_type = false;
+    if( fx == "target_attack" || fx == "projectile_attack" || fx == "cone_attack" ||
+        fx == "line_attack" ) {
+        damage_string = _( "Damage" );
+        aoe_string = _( "AoE" );
+        has_damage_type = sp.min_damage > 0 && sp.max_damage > 0;
+    } else if( fx == "spawn_item" || fx == "summon_monster" ) {
+        damage_string = _( "Spawned" );
+    } else if( fx == "targeted_polymorph" ) {
+        damage_string = _( "Threshold" );
+    } else if( fx == "recover_energy" ) {
+        damage_string = _( "Recover" );
+    } else if( fx == "teleport_random" ) {
+        aoe_string = _( "Variance" );
+    } else if( fx == "area_pull" || fx == "area_push" ||  fx == "ter_transform" ) {
+        aoe_string = _( "AoE" );
+    }
+
+    if( has_damage_type ) {
+        print_colored_text( w, point( start_x, line++ ), gray, gray, string_format( "%s: %s",
+                            _( "Damage Type" ),
+                            colorize( fake_spell.damage_type_string(), fake_spell.damage_type_color() ) ) );
+    }
+    line++;
+
+    print_colored_text( w, point( start_x, line++ ), gray, gray,
+                        string_format( "%s %s %s %s",
+                                       //~ translation should not exceed 10 console cells
+                                       left_justify( _( "Stat Gain" ), 10 ),
+                                       //~ translation should not exceed 7 console cells
+                                       left_justify( _( "lvl 0" ), 7 ),
+                                       //~ translation should not exceed 7 console cells
+                                       left_justify( _( "per lvl" ), 7 ),
+                                       //~ translation should not exceed 7 console cells
+                                       left_justify( _( "max lvl" ), 7 ) ) );
+    std::vector<std::tuple<std::string, int, float, int>> rows;
+
+    if( sp.max_damage != 0 && sp.min_damage != 0 && !damage_string.empty() ) {
+        rows.emplace_back( damage_string, sp.min_damage, sp.damage_increment, sp.max_damage );
+    }
+
+    if( sp.max_range != 0 && sp.min_range != 0 ) {
+        rows.emplace_back( _( "Range" ), sp.min_range, sp.range_increment, sp.max_range );
+    }
+
+    if( sp.min_aoe != 0 && sp.max_aoe != 0 && !aoe_string.empty() ) {
+        rows.emplace_back( aoe_string, sp.min_aoe, sp.aoe_increment, sp.max_aoe );
+    }
+
+    if( sp.min_duration != 0 && sp.max_duration != 0 ) {
+        rows.emplace_back( _( "Duration" ), sp.min_duration, static_cast<float>( sp.duration_increment ),
+                           sp.max_duration );
+    }
+
+    rows.emplace_back( _( "Cast Cost" ), sp.base_energy_cost, sp.energy_increment,
+                       sp.final_energy_cost );
+    rows.emplace_back( _( "Cast Time" ), sp.base_casting_time, sp.casting_time_increment,
+                       sp.final_casting_time );
+
+    for( std::tuple<std::string, int, float, int> &row : rows ) {
+        mvwprintz( w, point( start_x, line ), c_light_gray, std::get<0>( row ) );
+        print_colored_text( w, point( start_x + 11, line ), gray, gray,
+                            color_number( std::get<1>( row ) ) );
+        print_colored_text( w, point( start_x + 19, line ), gray, gray,
+                            color_number( std::get<2>( row ) ) );
+        print_colored_text( w, point( start_x + 27, line ), gray, gray,
+                            color_number( std::get<3>( row ) ) );
+        line++;
+    }
+}
+
+void spellbook_callback::refresh( uilist *menu )
+{
+    mvwputch( menu->window, point( menu->pad_left, 0 ), c_magenta, LINE_OXXX );
+    mvwputch( menu->window, point( menu->pad_left, menu->w_height - 1 ), c_magenta, LINE_XXOX );
+    for( int i = 1; i < menu->w_height - 1; i++ ) {
+        mvwputch( menu->window, point( menu->pad_left, i ), c_magenta, LINE_XOXO );
+    }
+    if( menu->selected >= 0 && static_cast<size_t>( menu->selected ) < spells.size() ) {
+        draw_spellbook_info( spells[menu->selected], menu );
+    }
+    wnoutrefresh( menu->window );
+}
+
+void fake_spell::load( const JsonObject &jo )
+{
+    std::string temp_id;
+    mandatory( jo, false, "id", temp_id );
+    id = spell_id( temp_id );
+    optional( jo, false, "hit_self", self, false );
+
+    optional( jo, false, "once_in", trigger_once_in, 1 );
+    optional( jo, false, "message", trigger_message );
+    optional( jo, false, "npc_message", npc_trigger_message );
+    int max_level_int;
+    optional( jo, false, "max_level", max_level_int, -1 );
+    if( max_level_int == -1 ) {
+        max_level = cata::nullopt;
+    } else {
+        max_level = max_level_int;
+    }
+    optional( jo, false, "min_level", level, 0 );
+    if( jo.has_string( "level" ) ) {
+        debugmsg( "level member for fake_spell was renamed to min_level.  id: %s", temp_id );
+    }
+}
+
+void fake_spell::serialize( JsonOut &json ) const
+{
+    json.start_object();
+    json.member( "id", id );
+    json.member( "hit_self", self );
+    json.member( "once_in", trigger_once_in );
+
+    if( !max_level ) {
+        json.member( "max_level", -1 );
+    } else {
+        json.member( "max_level", *max_level );
+    }
+    json.member( "min_level", level );
+    json.end_object();
+}
+
+void fake_spell::deserialize( JsonIn &jsin )
+{
+    JsonObject data = jsin.get_object();
+    load( data );
+}
+
+spell fake_spell::get_spell( int min_level_override ) const
+{
+    spell sp( id );
+    // the max level this spell will be. can be optionally limited
+    int spell_limiter = max_level ? std::min( *max_level, sp.get_max_level() ) : sp.get_max_level();
+    // level is the minimum level the fake_spell will output
+    min_level_override = std::max( min_level_override, level );
+    if( min_level_override > spell_limiter ) {
+        // this override is for min level, and does not override max level
+        min_level_override = spell_limiter;
+    }
+    // the "level" of the fake spell is the goal, but needs to be clamped to min and max
+    int level_of_spell = clamp( level, min_level_override,  std::min( sp.get_max_level(),
+                                spell_limiter ) );
+    if( level > spell_limiter ) {
+        debugmsg( "ERROR: fake spell %s has higher min_level than max_level", id.c_str() );
+        return sp;
+    }
+    while( sp.get_level() < level_of_spell ) {
+        sp.gain_level();
+    }
+    return sp;
+}
+
+void spell_events::notify( const cata::event &e )
+{
+    switch( e.type() ) {
+        case event_type::player_levels_spell: {
+            spell_id sid = e.get<spell_id>( "spell" );
+            int slvl = e.get<int>( "new_level" );
+            spell_type spell_cast = spell_factory.obj( sid );
+            for( std::map<std::string, int>::iterator it = spell_cast.learn_spells.begin();
+                 it != spell_cast.learn_spells.end(); ++it ) {
+                int learn_at_level = it->second;
+                if( learn_at_level == slvl ) {
+                    std::string learn_spell_id = it->first;
+                    get_player_character().magic.learn_spell( learn_spell_id, get_player_character() );
+                    spell_type spell_learned = spell_factory.obj( spell_id( learn_spell_id ) );
+                    add_msg(
+                        _( "Your experience and knowledge in creating and manipulating magical energies to cast %s have opened your eyes to new possibilities, you can now cast %s." ),
+                        spell_cast.name,
+                        spell_learned.name );
+                }
+            }
+            break;
+        }
+        default:
+            break;
+
+    }
 }

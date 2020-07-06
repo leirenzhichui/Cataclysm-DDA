@@ -37,7 +37,7 @@
   {
     "id": "morale_game",
     "type": "morale_type",
-    "text": "Played Video Game"
+    "text": "Played Game"
   },
   {
     "id": "morale_marloss",
@@ -123,6 +123,11 @@
     "id": "morale_cannibal",
     "type": "morale_type",
     "text": "Ate Human Flesh"
+  },
+  {
+    "id": "morale_demicannibal",
+    "type": "morale_type",
+    "text": "Ate Demihuman Flesh"
   },
   {
     "id": "morale_vegetarian",
@@ -248,6 +253,16 @@
     "id": "morale_perm_masochist",
     "type": "morale_type",
     "text": "Masochism"
+  },
+  {
+    "id": "morale_perm_noface",
+    "type": "morale_type",
+    "text": "You have no face!"
+  },
+  {
+    "id": "morale_perm_fpmode_on",
+    "type": "morale_type",
+    "text": "You feel pumped!"
   },
   {
     "id": "morale_perm_hoarder",

@@ -36,6 +36,19 @@
     "flags": [ "ALLOW_ROTTEN" ]
   },
   {
+    "result": "seed_cattail",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": 5000,
+    "autolearn": true,
+    "qualities": [ { "id": "CUT", "level": 1 } ],
+    "components": [ [ [ "cattail_stalk", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
     "result": "seed_corn",
     "type": "recipe",
     "category": "CC_FOOD",
@@ -121,6 +134,42 @@
     "autolearn": true,
     "qualities": [ { "id": "CUT", "level": 1 } ],
     "components": [ [ [ "blueberries", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
+    "result": "seed_salsify_raw",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "salsify_raw", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
+    "result": "seed_chicory",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "chicory_raw", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
+    "result": "seed_wildcarrot",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "carrot_wild", 3 ] ] ],
     "flags": [ "ALLOW_ROTTEN" ]
   },
   {
@@ -341,6 +390,18 @@
     "flags": [ "ALLOW_ROTTEN" ]
   },
   {
+    "result": "seed_raw_burdock",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "raw_burdock", 4 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
     "result": "seed_rhubarb",
     "type": "recipe",
     "category": "CC_FOOD",
@@ -439,6 +500,31 @@
     "time": "5 m",
     "autolearn": true,
     "components": [ [ [ "raw_lentils", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
+    "result": "seed_chamomile",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "components": [ [ [ "chamomile", 1 ] ] ],
+    "flags": [ "ALLOW_ROTTEN" ]
+  },
+  {
+    "result": "seed_sugar_beet",
+    "type": "recipe",
+    "category": "CC_FOOD",
+    "subcategory": "CSC_FOOD_SEEDS",
+    "skill_used": "survival",
+    "difficulty": 2,
+    "time": "5 m",
+    "autolearn": true,
+    "qualities": [ { "id": "CUT", "level": 1 } ],
+    "components": [ [ [ "sugar_beet", 1 ] ] ],
     "flags": [ "ALLOW_ROTTEN" ]
   }
 ]

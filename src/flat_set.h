@@ -1,6 +1,6 @@
 #pragma once
-#ifndef CATA_FLAT_SET
-#define CATA_FLAT_SET
+#ifndef CATA_SRC_FLAT_SET_H
+#define CATA_SRC_FLAT_SET_H
 
 #include <algorithm>
 #include <vector>
@@ -13,7 +13,9 @@ struct transparent_less_than {
 
     template<typename T, typename U>
     constexpr auto operator()( T &&lhs, U &&rhs ) const noexcept
+    // NOLINTNEXTLINE(cata-use-localized-sorting)
     -> decltype( std::forward<T>( lhs ) < std::forward<U>( rhs ) ) {
+        // NOLINTNEXTLINE(cata-use-localized-sorting)
         return std::forward<T>( lhs ) < std::forward<U>( rhs );
     }
 };
@@ -147,11 +149,11 @@ class flat_set : private Compare, Data
         }
 
         iterator insert( iterator, const value_type &value ) {
-            /// @todo Use insertion hint
+            /// TODO: Use insertion hint
             return insert( value ).first;
         }
         iterator insert( iterator, value_type &&value ) {
-            /// @todo Use insertion hint
+            /// TODO: Use insertion hint
             return insert( std::move( value ) ).first;
         }
         std::pair<iterator, bool> insert( const value_type &value ) {
@@ -171,7 +173,7 @@ class flat_set : private Compare, Data
 
         template<typename InputIt>
         void insert( InputIt first, InputIt last ) {
-            /// @todo could be faster when inserting only a few elements
+            /// TODO: could be faster when inserting only a few elements
             Data::insert( end(), first, last );
             sort_data();
         }
@@ -196,12 +198,12 @@ class flat_set : private Compare, Data
     friend bool operator op( const flat_set &l, const flat_set &r ) { \
         return l.data() op r.data(); \
     }
-        FLAT_SET_OPERATOR( == );
-        FLAT_SET_OPERATOR( != );
-        FLAT_SET_OPERATOR( < );
-        FLAT_SET_OPERATOR( <= );
-        FLAT_SET_OPERATOR( > );
-        FLAT_SET_OPERATOR( >= );
+        FLAT_SET_OPERATOR( == )
+        FLAT_SET_OPERATOR( != )
+        FLAT_SET_OPERATOR( < )
+        FLAT_SET_OPERATOR( <= )
+        FLAT_SET_OPERATOR( > )
+        FLAT_SET_OPERATOR( >= )
 #undef FLAT_SET_OPERATOR
     private:
         const Data &data() const {
@@ -214,6 +216,6 @@ class flat_set : private Compare, Data
         }
 };
 
-}
+} // namespace cata
 
-#endif // CATA_FLAT_SET
+#endif // CATA_SRC_FLAT_SET_H
